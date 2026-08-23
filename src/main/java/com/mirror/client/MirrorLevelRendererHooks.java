@@ -22,33 +22,34 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.Future;
 
-/** Builds and restores the temporary visible-section set used by one reflection pass. */
+/** Builds per-texture visible-section state and restores Vanilla state after each pass. */
 public final class MirrorLevelRendererHooks {
-    private static final int FRUSTUM_OFFSET_STEP = 4;
-    private static final int MAX_FRUSTUM_OFFSET_STEPS = 256;
     private static final Map<Class<?>, Method> BOUNDING_BOX_METHODS = new HashMap<>();
 
     private MirrorLevelRendererHooks() {
     }
 
-    public static State prepare(LevelRenderer renderer, Camera camera, Vec3 bfsStart) {
+    public static State prepare(LevelRenderer renderer, Camera camera, Vec3 bfsStart,
+                                TextureState textureState) {
+        if (EmbeddiumCompat.ownsSectionCulling()) return null;
         LevelRendererBridge access = (LevelRendererBridge) renderer;
         ViewArea viewArea = access.mirror$getViewArea();
         if (viewArea == null || viewArea.chunks == null) return null;
 
         State state = new State(access);
         try {
-            Object temporary = newStorage(access.mirror$getRenderChunkStorage().get(), viewArea.chunks.length);
+            Object currentStorage = access.mirror$getRenderChunkStorage().get();
+            Object isolatedStorage = textureState.getOrCreate(currentStorage, viewArea.chunks.length);
             Queue<Object> queue = new ArrayDeque<>();
             // Vanilla's occlusion graph uses the camera position both when seeding the BFS and
             // while propagating it. Keep that position identical for off-axis mirror passes;
             // using the reflected eye for propagation after seeding in front of the mirror can
             // reject whole sections at particular viewing angles.
             Vec3 cullingCameraPosition = bfsStart == null ? camera.getPosition() : bfsStart;
-            initializeQueue(renderer, new SeedCamera(cullingCameraPosition), queue);
-            updateRenderChunks(renderer, temporary, cullingCameraPosition, queue,
+            initializeQueue(renderer, new SeedCamera(cullingCameraPosition, camera), queue);
+            updateRenderChunks(renderer, isolatedStorage, cullingCameraPosition, queue,
                     Minecraft.getInstance().smartCull);
-            access.mirror$getRenderChunkStorage().set(temporary);
+            access.mirror$getRenderChunkStorage().set(isolatedStorage);
             // setupRender is intercepted for reflection passes.  Its normal implementation would
             // rebuild this storage from the player's camera and discard the mirror BFS result.
             access.mirror$getNeedsFrustumUpdate().set(false);
@@ -62,7 +63,7 @@ public final class MirrorLevelRendererHooks {
     }
 
     /**
-     * Applies the frustum selected by LevelRenderer.renderLevel to the temporary BFS result.
+     * Applies the frustum selected by LevelRenderer.renderLevel to the active texture's BFS result.
      * Vanilla normally does this from setupRender, which is deliberately skipped for mirrors so
      * that its player-camera update cannot replace the temporary storage.
      */
@@ -73,11 +74,10 @@ public final class MirrorLevelRendererHooks {
 
         @SuppressWarnings("rawtypes")
         ObjectArrayList visible = access.mirror$getRenderChunksInFrustum();
-        // Match vanilla LevelRenderer.setupRender's camera-section offset, but keep it bounded.
-        // Vanilla's loop assumes a symmetric frustum. A mirror intentionally puts its near plane
-        // in front of the reflected camera, so that assumption can never become true and would
-        // hang the render thread while entering a world.
-        Frustum cullingFrustum = offsetFrustumForMirror(frustum);
+        // Do not apply vanilla's camera-cube offset here.  That offset assumes a symmetric
+        // camera frustum and can move an asymmetric mirror frustum away from the sections it was
+        // built for.  The reflection pass prepares its own Frustum before entering renderLevel.
+        Frustum cullingFrustum = new Frustum(frustum);
         visible.clear();
         try {
             Object chunks = fieldOfType(storage, Set.class);
@@ -96,26 +96,24 @@ public final class MirrorLevelRendererHooks {
         }
     }
 
-    private static Frustum offsetFrustumForMirror(Frustum frustum) {
-        Camera camera = MirrorLevelRenderer.getActiveCamera();
-        if (camera == null) return new Frustum(frustum);
+    /** Persistent culling storage owned by one MirrorReflectionTexture. */
+    public static final class TextureState {
+        private Object storage;
+        private int sectionCount = -1;
 
-        Vec3 position = camera.getPosition();
-        double minX = Math.floor(position.x / 8.0) * 8.0;
-        double minY = Math.floor(position.y / 8.0) * 8.0;
-        double minZ = Math.floor(position.z / 8.0) * 8.0;
-        AABB cameraCube = new AABB(minX, minY, minZ, minX + 8.0, minY + 8.0, minZ + 8.0);
-
-        Frustum shifted = new Frustum(frustum);
-        if (shifted.isVisible(cameraCube)) return shifted;
-
-        net.minecraft.world.phys.Vec3 look = new net.minecraft.world.phys.Vec3(camera.getLookVector());
-        for (int step = 1; step <= MAX_FRUSTUM_OFFSET_STEPS; step++) {
-            Vec3 anchor = position.subtract(look.scale(FRUSTUM_OFFSET_STEP * (double) step));
-            shifted.prepare(anchor.x, anchor.y, anchor.z);
-            if (shifted.isVisible(cameraCube)) return shifted;
+        private Object getOrCreate(Object vanillaStorage, int requiredSectionCount) throws Exception {
+            if (storage == null || sectionCount != requiredSectionCount
+                    || storage.getClass() != vanillaStorage.getClass()) {
+                storage = newStorage(vanillaStorage, requiredSectionCount);
+                sectionCount = requiredSectionCount;
+            }
+            return storage;
         }
-        return shifted;
+
+        public void clear() {
+            storage = null;
+            sectionCount = -1;
+        }
     }
 
     private static Method boundingBoxMethod(Class<?> chunkType) throws NoSuchMethodException {
@@ -231,8 +229,9 @@ public final class MirrorLevelRendererHooks {
     }
 
     private static final class SeedCamera extends Camera {
-        private SeedCamera(Vec3 position) {
+        private SeedCamera(Vec3 position, Camera source) {
             setPosition(position);
+            setRotation(source.getYRot(), source.getXRot());
         }
     }
 

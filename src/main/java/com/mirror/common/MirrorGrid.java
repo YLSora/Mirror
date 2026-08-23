@@ -2,14 +2,15 @@ package com.mirror.common;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
+import org.jetbrains.annotations.Nullable;
 
 /** Rebuilds only rectangular groups of coplanar mirrors. */
 public final class MirrorGrid {
@@ -26,27 +27,46 @@ public final class MirrorGrid {
     }
 
     public static void rebuildAround(Level level, BlockPos seed, BlockState reference) {
+        rebuildAround(level, seed, reference, null);
+    }
+
+    /** Rebuilds a surviving group while carrying the removed master's identity to its successor. */
+    public static void rebuildAround(Level level, BlockPos seed, BlockState reference,
+                                     @Nullable CompoundTag removedOwner) {
         if (level.isClientSide || REBUILDING.get()) return;
         if (!(reference.getBlock() instanceof MirrorBlock mirror)) return;
         BlockState state = level.getBlockState(seed);
         if (!mirror.connectionMatches(reference, state)) return;
-        rebuild(level, seed, mirror);
+        rebuild(level, seed, mirror, removedOwner);
     }
 
     private static void rebuild(Level level, BlockPos seed, MirrorBlock mirror) {
+        rebuild(level, seed, mirror, null);
+    }
+
+    private static void rebuild(Level level, BlockPos seed, MirrorBlock mirror,
+                                @Nullable CompoundTag removedOwner) {
         REBUILDING.set(true);
         try {
             int max = mirror.maxConnectedSize();
             Set<Cell> component = collectComponent(level, seed, mirror, max);
             Rectangle selected = findLargestRectangle(component, max, mirror.squareAspectRatio());
+            BlockPos masterPos = toWorld(seed, mirror.getStateFacing(level, seed),
+                    selected.left(), selected.bottom());
+            CompoundTag masterData = removedOwner != null ? removedOwner
+                    : snapshotMaster(level, masterPos, seed);
+
+            // Remove all old owners before changing connection properties.  setBlockAndUpdate
+            // does not remove a BlockEntity when only a property changes, so relying on vanilla
+            // block replacement here leaves stale owners behind.
+            for (Cell cell : component) {
+                level.removeBlockEntity(cell.pos());
+            }
 
             for (Cell cell : component) {
                 BlockState current = level.getBlockState(cell.pos());
                 if (current.getBlock() == mirror) {
                     setConnection(level, cell.pos(), current, ConnectionType.SINGLE);
-                    if (level.getBlockEntity(cell.pos()) instanceof MirrorBlockEntity entity) {
-                        entity.setConnectionSize(1, 1);
-                    }
                 }
             }
 
@@ -65,13 +85,37 @@ public final class MirrorGrid {
                 }
             }
 
-            BlockPos masterPos = toWorld(seed, mirror.getStateFacing(level, seed), selected.left(), selected.bottom());
-            if (level.getBlockEntity(masterPos) instanceof MirrorBlockEntity master) {
+            // The final property writes may have caused a block-entity factory to run on a
+            // vanilla implementation that eagerly creates entities for property changes.  The
+            // invariant is stronger than that implementation detail: exactly one owner remains.
+            for (Cell cell : component) {
+                level.removeBlockEntity(cell.pos());
+            }
+
+            BlockState masterState = level.getBlockState(masterPos);
+            if (masterState.getBlock() == mirror) {
+                MirrorBlockEntity master = new MirrorBlockEntity(masterPos, masterState);
+                if (masterData != null) master.load(masterData);
                 master.setConnectionSize(selected.width(), selected.height());
+                level.setBlockEntity(master);
+                level.sendBlockUpdated(masterPos, masterState, masterState, 3);
             }
         } finally {
             REBUILDING.set(false);
         }
+    }
+
+    @Nullable
+    private static CompoundTag snapshotMaster(Level level, BlockPos newMaster, BlockPos seed) {
+        if (level.getBlockEntity(newMaster) instanceof MirrorBlockEntity entity) {
+            return entity.saveWithoutMetadata();
+        }
+        MirrorBlockEntity currentMaster = MirrorBlock.getMasterBlockEntity(level, seed);
+        if (currentMaster != null) {
+            MirrorBlockEntity entity = currentMaster;
+            return entity.saveWithoutMetadata();
+        }
+        return null;
     }
 
     private static Set<Cell> collectComponent(Level level, BlockPos seed, MirrorBlock mirror, int max) {
@@ -150,7 +194,10 @@ public final class MirrorGrid {
 
     private static void setConnection(Level level, BlockPos pos, BlockState state, ConnectionType type) {
         if (state.getValue(MirrorBlock.CONNECTION) != type) {
-            level.setBlockAndUpdate(pos, state.setValue(MirrorBlock.CONNECTION, type));
+            // This is an internal property migration.  Sending a client update is required, but
+            // notifying all six neighbours here re-enters the rebuild for every cell and can fill
+            // CollectingNeighborUpdater's chain while a single rectangle is being assembled.
+            level.setBlock(pos, state.setValue(MirrorBlock.CONNECTION, type), Block.UPDATE_CLIENTS);
         }
     }
 

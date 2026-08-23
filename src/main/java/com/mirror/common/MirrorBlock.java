@@ -4,6 +4,7 @@ import com.mirror.MirrorMod;
 import com.mirror.config.MirrorConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -128,9 +129,11 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
 
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
-        // Every cell keeps a tiny tile so reshaping never loses the UUID of a surviving cell.
-        // Rendering is still performed only by the bottom-left master cell.
-        return new MirrorBlockEntity(pos, state);
+        // A connected mirror has one owner: the rectangle's bottom-left cell.  Returning null
+        // here is important; creating a tile for every cell makes BlockEntityRenderDispatcher
+        // submit the same screen once per block and also makes a non-master tile look like a
+        // valid owner to the renderer.
+        return isMasterState(state) ? new MirrorBlockEntity(pos, state) : null;
     }
 
     @Nullable
@@ -165,17 +168,19 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
     public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState,
                          boolean movedByPiston) {
         if (!state.is(newState.getBlock())) {
+            CompoundTag removedOwner = level.getBlockEntity(pos) instanceof MirrorBlockEntity entity
+                    ? entity.saveWithoutMetadata() : null;
             for (Direction direction : Direction.values()) {
                 if (direction.getAxis() != Direction.Axis.Y &&
                         level.getBlockState(pos.relative(direction)).getBlock() == this) {
-                    MirrorGrid.rebuildAround(level, pos.relative(direction), state);
+                    MirrorGrid.rebuildAround(level, pos.relative(direction), state, removedOwner);
                 }
             }
             if (level.getBlockState(pos.above()).getBlock() == this) {
-                MirrorGrid.rebuildAround(level, pos.above(), state);
+                MirrorGrid.rebuildAround(level, pos.above(), state, removedOwner);
             }
             if (level.getBlockState(pos.below()).getBlock() == this) {
-                MirrorGrid.rebuildAround(level, pos.below(), state);
+                MirrorGrid.rebuildAround(level, pos.below(), state, removedOwner);
             }
         }
         super.onRemove(state, level, pos, newState, movedByPiston);
@@ -201,22 +206,41 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
 
     @Nullable
     public static MirrorBlockEntity getMasterBlockEntity(Level level, BlockPos pos) {
+        BlockPos masterPos = getMasterBlockPos(level, pos);
+        return masterPos == null || !(level.getBlockEntity(masterPos) instanceof MirrorBlockEntity entity)
+                ? null : entity;
+    }
+
+    /** Returns the rectangle owner, even while its block entity is being migrated. */
+    @Nullable
+    public static BlockPos getMasterBlockPos(Level level, BlockPos pos) {
         if (!(level.getBlockState(pos).getBlock() instanceof MirrorBlock mirror)) return null;
         BlockState reference = level.getBlockState(pos);
         Direction facing = reference.getValue(FACING);
         BlockPos current = pos;
-        while (level.getBlockState(current).getBlock() == mirror
-                && level.getBlockState(current).getValue(FACING) == facing
-                && level.getBlockState(current).getValue(FAR) == reference.getValue(FAR)
+        while (isSameCell(level.getBlockState(current), mirror, reference)
                 && level.getBlockState(current).getValue(CONNECTION).isConnected(Direction.DOWN, facing)) {
             current = current.below();
         }
-        while (level.getBlockState(current).getBlock() == mirror
-                && level.getBlockState(current).getValue(FACING) == facing
-                && level.getBlockState(current).getValue(FAR) == reference.getValue(FAR)
-                && level.getBlockState(current).getValue(CONNECTION).isConnected(facing.getClockWise(), facing)) {
+        while (isSameCell(level.getBlockState(current), mirror, reference)
+                && level.getBlockState(current).getValue(CONNECTION)
+                .isConnected(facing.getClockWise(), facing)) {
             current = current.relative(facing.getClockWise());
         }
-        return level.getBlockEntity(current) instanceof MirrorBlockEntity entity ? entity : null;
+        return isSameCell(level.getBlockState(current), mirror, reference)
+                && isMasterState(level.getBlockState(current)) ? current : null;
+    }
+
+    public static boolean isMasterState(BlockState state) {
+        if (!(state.getBlock() instanceof MirrorBlock)) return false;
+        return isMasterConnection(state.getValue(FACING), state.getValue(CONNECTION));
+    }
+
+    public static boolean isMasterConnection(Direction facing, ConnectionType connection) {
+        return connection.isMaster(facing);
+    }
+
+    private static boolean isSameCell(BlockState state, MirrorBlock mirror, BlockState reference) {
+        return mirror.connectionMatches(reference, state);
     }
 }

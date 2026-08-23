@@ -77,6 +77,20 @@ tasks.named('test', Test) {
     useJUnitPlatform()
 }
 
+// Forge's game-test runner reads fallback SNBT templates from its working-directory
+// gameteststructures folder rather than the resource manager. Keep the checked-in template
+// available to runGameTestServer without requiring a hand-copied run directory.
+tasks.configureEach {
+    if (name == 'prepareRunGameTestServer') {
+        doLast {
+            copy {
+                from(layout.projectDirectory.dir('src/main/resources/gameteststructures'))
+                into(layout.projectDirectory.dir('run/gameteststructures'))
+            }
+        }
+    }
+}
+
 processResources {
     def replaceProperties = [
             minecraft_version: minecraft_version,

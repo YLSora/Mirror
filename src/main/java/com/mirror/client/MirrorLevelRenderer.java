@@ -11,6 +11,7 @@ import com.mojang.blaze3d.vertex.VertexSorting;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.PostChain;
 import net.minecraft.core.Direction;
 import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.EntityType;
@@ -91,6 +92,14 @@ public final class MirrorLevelRenderer {
     public static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
                               RenderTarget target, float partialTick, Matrix4f customProjection,
                               float yaw, float pitch, int recursionDepth, List<UUID> parentChain) {
+        render(level, mirror, reflection, target, partialTick, customProjection, yaw, pitch,
+                recursionDepth, parentChain, new MirrorLevelRendererHooks.TextureState());
+    }
+
+    static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
+                       RenderTarget target, float partialTick, Matrix4f customProjection,
+                       float yaw, float pitch, int recursionDepth, List<UUID> parentChain,
+                       MirrorLevelRendererHooks.TextureState textureState) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level != level || minecraft.player == null) return;
 
@@ -105,15 +114,25 @@ public final class MirrorLevelRenderer {
         List<UUID> previousParentChain = currentParentChain;
         Camera previousCamera = activeCamera;
         GameRendererAccess rendererAccess = gameRenderer instanceof GameRendererAccess access ? access : null;
+        OculusCompat.State oculusState = OculusCompat.capture();
+        PostChain previousPostEffect = rendererAccess == null ? null : rendererAccess.mirror$getPostEffect();
+        boolean previousEffectActive = rendererAccess != null && rendererAccess.mirror$isEffectActive();
         Camera previousMainCamera = rendererAccess == null ? gameRenderer.getMainCamera()
                 : rendererAccess.mirror$getMainCamera();
         ((MirrorCamera) camera).configure(level, reflection.reflectedEye(),
                 yaw, pitch, partialTick);
 
-        Matrix4f oldProjection = new Matrix4f(RenderSystem.getProjectionMatrix());
         float oldRenderDistance = gameRenderer.getRenderDistance();
         MirrorLevelRendererHooks.State cullState = null;
         try {
+            oculusState.enterReflection();
+            // A post effect owns the main framebuffer and its shader uniforms.  Leaving it active
+            // during an off-screen world pass makes Oculus sample the mirror target as if it were
+            // the main frame, which is the source of the one-frame-later black screen.
+            if (rendererAccess != null) {
+                rendererAccess.mirror$setPostEffect(null);
+                rendererAccess.mirror$setEffectActive(false);
+            }
             fabulousState = FabulousDeferredState.captureAndDisable(minecraft.levelRenderer);
             target.bindWrite(true);
             if (minecraftAccess != null) minecraftAccess.mirror$setMainRenderTarget(target);
@@ -158,7 +177,8 @@ public final class MirrorLevelRenderer {
             // The accessor-backed culling state is part of the same transaction as the
             // framebuffer/camera changes.  If a mixin is unavailable or chunk setup fails,
             // the finally block must still restore the main render pass.
-            cullState = MirrorLevelRendererHooks.prepare(minecraft.levelRenderer, camera, bfsStart);
+            cullState = MirrorLevelRendererHooks.prepare(minecraft.levelRenderer, camera, bfsStart,
+                    textureState);
             // Match GameRenderer's world-to-view transform. Camera.rotation() maps the local
             // forward (+Z) vector into the world; the extra 180-degree yaw is the vanilla
             // projection convention that turns that forward vector into OpenGL's -Z view axis.
@@ -182,11 +202,13 @@ public final class MirrorLevelRenderer {
             if (minecraftAccess != null) minecraftAccess.mirror$setMainRenderTarget(mainTarget);
             mainTarget.bindWrite(true);
             renderState.restore();
-            RenderSystem.setProjectionMatrix(oldProjection, VertexSorting.DISTANCE_TO_ORIGIN);
             if (rendererAccess != null) {
                 rendererAccess.mirror$setRenderDistance(oldRenderDistance);
                 rendererAccess.mirror$setMainCamera(previousMainCamera);
+                rendererAccess.mirror$setPostEffect(previousPostEffect);
+                rendererAccess.mirror$setEffectActive(previousEffectActive);
             }
+            oculusState.close();
             currentMirrorId = previousMirrorId;
             currentRecursionDepth = previousDepth;
             currentParentChain = previousParentChain;

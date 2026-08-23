@@ -86,6 +86,11 @@ public enum ConnectionType implements StringRepresentable {
         return this == SINGLE;
     }
 
+    public boolean isMaster(Direction facing) {
+        return !isConnected(Direction.DOWN, facing)
+                && !isConnected(facing.getClockWise(), facing);
+    }
+
     @Override
     public String getSerializedName() {
         return name().toLowerCase(Locale.ROOT);

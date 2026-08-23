@@ -21,6 +21,8 @@ public final class MirrorReflectionTexture implements AutoCloseable {
     private final ResourceLocation textureLocation;
     private final TextureTarget target;
     private final MirrorRenderTargetTexture texture;
+    private final MirrorLevelRendererHooks.TextureState cullingState =
+            new MirrorLevelRendererHooks.TextureState();
     private final int recursionDepth;
     private final List<UUID> parentChain;
     private boolean rendered;
@@ -83,7 +85,7 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         Matrix4f projection = new Matrix4f().frustum(left, rightPlane, bottom, top, near, 1000.0f);
 
         MirrorLevelRenderer.render(level, mirror, groupReflection, target, partialTick,
-                projection, facing.toYRot(), 0.0f, recursionDepth, parentChain);
+                projection, facing.toYRot(), 0.0f, recursionDepth, parentChain, cullingState);
         texture.refreshId();
         rendered = true;
         if (firstRenderNanos < 0) firstRenderNanos = System.nanoTime();
@@ -92,6 +94,7 @@ public final class MirrorReflectionTexture implements AutoCloseable {
     @Override
     public void close() {
         Minecraft.getInstance().getTextureManager().release(textureLocation);
+        cullingState.clear();
         target.destroyBuffers();
     }
 

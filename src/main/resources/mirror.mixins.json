@@ -6,9 +6,12 @@
   "compatibilityLevel": "JAVA_17",
   "client": [
     "LevelRendererMixin",
+    "FrustumMixin",
+    "OculusPipelineMixin",
     "MinecraftMixin",
     "MinecraftAccess",
     "GameRendererAccess",
-    "GameRendererMixin"
+    "GameRendererMixin",
+    "PoseStackAccess"
   ]
 }

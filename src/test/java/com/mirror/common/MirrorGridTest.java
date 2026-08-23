@@ -1,12 +1,15 @@
 package com.mirror.common;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MirrorGridTest {
     @Test
@@ -43,6 +46,33 @@ class MirrorGridTest {
         assertEquals(2, rectangle.width());
         assertEquals(2, rectangle.height());
         assertEquals(4, rectangle.area());
+    }
+
+    @Test
+    void bottomLeftIsTheOnlyOwnerForAllFacingDirections() {
+        for (Direction facing : new Direction[]{Direction.NORTH, Direction.EAST,
+                Direction.SOUTH, Direction.WEST}) {
+            assertTrue(ConnectionType.SINGLE.isMaster(facing));
+            assertTrue(ConnectionType.V_BOTTOM.isMaster(facing),
+                    "1xN master: " + facing);
+            assertTrue(ConnectionType.H_LEFT.isMaster(facing),
+                    "Nx1 master: " + facing);
+            assertTrue(ConnectionType.BOTTOM_LEFT.isMaster(facing),
+                    "2x2 master: " + facing);
+            assertFalse(ConnectionType.TOP_RIGHT.isMaster(facing),
+                    "non-master: " + facing);
+        }
+    }
+
+    @Test
+    void localHorizontalAxisAlwaysUsesFacingCounterClockwise() {
+        BlockPos origin = new BlockPos(10, 20, 30);
+        for (Direction facing : new Direction[]{Direction.NORTH, Direction.EAST,
+                Direction.SOUTH, Direction.WEST}) {
+            assertEquals(origin.relative(facing.getCounterClockWise()),
+                    MirrorGrid.toWorld(origin, facing, 1, 0));
+            assertEquals(origin.above(), MirrorGrid.toWorld(origin, facing, 0, 1));
+        }
     }
 
     private static Set<MirrorGrid.Cell> cells(int... coordinates) {
