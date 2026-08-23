@@ -1,0 +1,40 @@
+{
+  "parent": "minecraft:block/block",
+  "textures": {
+    "particle": "mirror:block/mirror/side",
+    "front": "mirror:block/mirror/front/left_middle",
+    "back": "mirror:block/mirror/back/right_middle",
+    "side": "mirror:block/mirror/side"
+  },
+  "elements": [
+    {
+      "from": [
+        0,
+        0,
+        14
+      ],
+      "to": [
+        16,
+        16,
+        16
+      ],
+      "faces": {
+        "north": {
+          "texture": "#front"
+        },
+        "south": {
+          "texture": "#back"
+        },
+        "east": {
+          "texture": "#side",
+          "uv": [
+            14,
+            0,
+            16,
+            16
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,146 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'maven-publish'
+    id 'net.minecraftforge.gradle' version '[6.0,6.2)'
+    id 'org.spongepowered.mixin' version '0.7.38'
+}
+
+group = project.maven_group
+version = project.mod_version
+
+base {
+    archivesName = 'Mirror'
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(17)
+
+minecraft {
+    mappings channel: 'official', version: minecraft_version
+
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+            mods {
+                mirror {
+                    source sourceSets.main
+                }
+            }
+        }
+
+        client {
+            args '--username', 'Dev'
+        }
+
+        server {
+            args '--nogui'
+        }
+
+        gameTestServer {
+            args '--nogui'
+        }
+    }
+}
+
+mixin {
+    add sourceSets.main, 'mirror.refmap.json'
+    config 'mirror.mixins.json'
+    config 'mirror_bridge.mixins.json'
+}
+
+repositories {
+    maven { url = 'https://maven.minecraftforge.net' }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+tasks.named('compileJava', JavaCompile) {
+    outputs.file(layout.buildDirectory.file('tmp/compileJava/compileJava-refmap.json'))
+    outputs.file(layout.buildDirectory.file('tmp/compileJava/mirror.refmap.json'))
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform()
+}
+
+processResources {
+    def replaceProperties = [
+            minecraft_version: minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            forge_version: forge_version,
+            forge_version_range: forge_version_range,
+            loader_version_range: loader_version_range,
+            mod_id: mod_id,
+            mod_name: mod_name,
+            mod_version: mod_version,
+            mod_license: mod_license,
+            mod_author: mod_author,
+            mod_description: mod_description
+    ]
+    inputs.properties replaceProperties
+    filesMatching(['META-INF/mods.toml']) {
+        expand replaceProperties
+    }
+}
+
+jar {
+    manifest {
+        attributes([
+                'Specification-Title'     : mod_name,
+                'Specification-Vendor'    : mod_author,
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : project.name,
+                'Implementation-Version'  : project.jar.archiveVersion,
+                'Implementation-Vendor'   : mod_author,
+                'Built-On-Minecraft'      : minecraft_version,
+                'MixinConfigs'            : 'mirror.mixins.json,mirror_bridge.mixins.json'
+        ])
+    }
+    finalizedBy 'reobfJar'
+}
+
+tasks.register('sourcesJar', Jar) {
+    archiveClassifier = 'sources'
+    from sourceSets.main.allSource
+}
+
+assemble.dependsOn tasks.named('sourcesJar')
+
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            artifact jar
+            artifact tasks.named('sourcesJar')
+            pom {
+                name = 'Mirror'
+                description = mod_description
+                licenses {
+                    license {
+                        name = mod_license
+                    }
+                }
+            }
+        }
+    }
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}

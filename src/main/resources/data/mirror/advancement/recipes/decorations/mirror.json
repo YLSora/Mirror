@@ -1,0 +1,16 @@
+{
+  "parent": "minecraft:recipes/root",
+  "criteria": {
+    "has_crystalline": {
+      "trigger": "minecraft:inventory_changed",
+      "conditions": {"items": [{"items": ["mirror:crystalline"]}]}
+    },
+    "has_the_recipe": {
+      "trigger": "minecraft:recipe_unlocked",
+      "conditions": {"recipe": "mirror:mirror"}
+    }
+  },
+  "requirements": [["has_crystalline", "has_the_recipe"]],
+  "rewards": {"recipes": ["mirror:mirror"]},
+  "sends_telemetry_event": false
+}

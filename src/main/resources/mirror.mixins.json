@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "refmap": "mirror.refmap.json",
+  "package": "com.mirror.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "LevelRendererMixin",
+    "MinecraftMixin",
+    "MinecraftAccess",
+    "GameRendererAccess",
+    "GameRendererMixin"
+  ]
+}
