@@ -8,11 +8,8 @@ import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.Tesselator;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
-import org.joml.Matrix3f;
 import org.joml.Matrix4f;
 
 import java.util.ArrayList;
@@ -31,8 +28,7 @@ public final class DeferredMirrorSurfaceRenderer {
 
     public static void submit(ResourceLocation texture, PoseStack.Pose pose,
                               float left, float right, float bottom, float top) {
-        SURFACES.add(new Surface(texture, new Matrix4f(pose.pose()), new Matrix3f(pose.normal()),
-                left, right, bottom, top));
+        SURFACES.add(new Surface(texture, new Matrix4f(pose.pose()), left, right, bottom, top));
     }
 
     public static void flush() {
@@ -43,13 +39,15 @@ public final class DeferredMirrorSurfaceRenderer {
         RenderSystem.viewport(0, 0, minecraft.getMainRenderTarget().width,
                 minecraft.getMainRenderTarget().height);
         for (Surface surface : SURFACES) {
-            RenderType renderType = RenderType.entityTranslucentEmissive(surface.texture());
+            // The reflection target is already fully lit. Present it with the dedicated unlit,
+            // no-cull mirror surface state so orientation cannot change its brightness or visibility.
+            RenderType renderType = MirrorRenderTypes.mirrorSurface(surface.texture());
             renderType.setupRenderState();
             // Fabulous entity targets have already been resolved by the shader final pass. The
             // completed LDR surface belongs directly in the main target while retaining its depth.
             minecraft.getMainRenderTarget().bindWrite(false);
             BufferBuilder builder = Tesselator.getInstance().getBuilder();
-            builder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
+            builder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR_TEX);
             vertex(builder, surface, surface.left(), surface.bottom(), 0.0f, 0.0f);
             vertex(builder, surface, surface.right(), surface.bottom(), 1.0f, 0.0f);
             vertex(builder, surface, surface.right(), surface.top(), 1.0f, 1.0f);
@@ -71,13 +69,10 @@ public final class DeferredMirrorSurfaceRenderer {
         builder.vertex(surface.pose(), x, y, 0.0f)
                 .color(255, 255, 255, 255)
                 .uv(u, v)
-                .overlayCoords(OverlayTexture.NO_OVERLAY)
-                .uv2(LightTexture.FULL_BRIGHT)
-                .normal(surface.normal(), 0.0f, 0.0f, 1.0f)
                 .endVertex();
     }
 
-    private record Surface(ResourceLocation texture, Matrix4f pose, Matrix3f normal,
+    private record Surface(ResourceLocation texture, Matrix4f pose,
                            float left, float right, float bottom, float top) {
     }
 }

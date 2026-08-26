@@ -91,7 +91,8 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         return Math.min(1.0f, elapsed / 300_000_000.0f);
     }
 
-    public void render(Level level, MirrorBlockEntity mirror, Vec3 eye, float partialTick) {
+    public void render(Level level, MirrorBlockEntity mirror, Vec3 eye, float partialTick,
+                       List<MirrorLevelRenderer.ReflectionPlane> parentPath) {
         if (mirror.isRemoved() || level != Minecraft.getInstance().level) return;
         Direction facing = mirror.getBlockState().getValue(MirrorBlock.FACING);
         Vec3 normal = Vec3.atLowerCornerOf(facing.getNormal());
@@ -127,7 +128,7 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         MirrorCapturePool.CaptureSlot capture = MirrorCapturePool.acquire(
                 recursionDepth, surfaceTarget.width, surfaceTarget.height);
         MirrorLevelRenderer.render(level, mirror, groupReflection, capture.target(), partialTick,
-                projection, facing.toYRot(), 0.0f, recursionDepth, parentChain, cullingState);
+                projection, facing.toYRot(), 0.0f, recursionDepth, parentChain, parentPath, cullingState);
         compose(mirror, capture.target());
         surfaceTexture.refreshId();
         rendered = true;
@@ -175,10 +176,10 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         } finally {
             if (applied) shader.clear();
             surfaceTarget.unbindWrite();
-            // Composition runs only from RenderTick START, after the nested world transaction has
-            // restored Oculus and before the next outer frame establishes its render state. Avoid
-            // a second full GL snapshot here: it adds dozens of synchronous texture-state queries
-            // per visible mirror and is particularly expensive with image-heavy shader packs.
+            // Composition runs after the nested transaction restores Oculus but immediately before
+            // the outer LevelRenderer clears its target and begins the shader pipeline. That outer
+            // setup re-establishes render state, so avoid a second full GL snapshot here: it adds
+            // dozens of synchronous texture-state queries per visible mirror.
             mainTarget.bindWrite(true);
             RenderSystem.viewport(0, 0, mainTarget.width, mainTarget.height);
             RenderSystem.colorMask(true, true, true, true);

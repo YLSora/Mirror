@@ -76,8 +76,10 @@ public final class MirrorConfig {
                     .define("smoothSampling", false);
             recursionMode = builder.comment("OFF disables nested mirrors; SHARED reuses direct textures; RECURSIVE uses chain-isolated textures up to maxRecursionDepth.")
                     .defineEnum("recursionMode", RecursionMode.RECURSIVE);
-            maxRecursionDepth = builder.comment("Hard upper bound for recursive reflection renders.")
-                    .defineInRange("maxRecursionDepth", 2, 0, 8);
+            maxRecursionDepth = builder.comment(
+                            "Maximum total reflection count, including the direct mirror pass. " +
+                            "1 renders only the direct reflection; values up to 8 allow deeper mirror-in-mirror reflections.")
+                    .defineInRange("maxRecursionDepth", 2, 1, 8);
             recursiveResolutionDecay = builder.comment("Resolution multiplier applied at each recursive reflection depth.")
                     .defineInRange("recursiveResolutionDecay", 0.5D, 0.1D, 1.0D);
             recursiveRenderDistanceDecay = builder.comment("Render-distance multiplier applied at each recursive reflection depth.")

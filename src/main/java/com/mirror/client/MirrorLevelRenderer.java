@@ -77,6 +77,23 @@ public final class MirrorLevelRenderer {
         return List.copyOf(chain);
     }
 
+    /** Returns the static mirror planes that transform the main eye into the current reflected eye. */
+    public static List<ReflectionPlane> getChildReflectionPath() {
+        RenderFrame frame = RENDER_STACK.peek();
+        return frame == null ? List.of() : frame.reflectionPath();
+    }
+
+    /** Rebuilds a recursive camera from the current outer-frame eye instead of stale prior-frame coordinates. */
+    public static Vec3 resolveReflectionPath(Vec3 mainEye, List<ReflectionPlane> path) {
+        Vec3 eye = mainEye;
+        for (ReflectionPlane plane : path) {
+            MirrorReflection reflection = MirrorReflection.compute(plane.point(), plane.normal(), eye);
+            if (!reflection.viewerInFront()) return null;
+            eye = reflection.reflectedEye();
+        }
+        return eye;
+    }
+
     public static void clearContext() {
         RENDER_STACK.clear();
         mainBobEyeOffset = Vec3.ZERO;
@@ -92,12 +109,13 @@ public final class MirrorLevelRenderer {
                               RenderTarget target, float partialTick, Matrix4f customProjection,
                               float yaw, float pitch, int recursionDepth, List<UUID> parentChain) {
         render(level, mirror, reflection, target, partialTick, customProjection, yaw, pitch,
-                recursionDepth, parentChain, new MirrorLevelRendererHooks.TextureState());
+                recursionDepth, parentChain, List.of(), new MirrorLevelRendererHooks.TextureState());
     }
 
     static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
                        RenderTarget target, float partialTick, Matrix4f customProjection,
                        float yaw, float pitch, int recursionDepth, List<UUID> parentChain,
+                       List<ReflectionPlane> parentReflectionPath,
                        MirrorLevelRendererHooks.TextureState textureState) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level != level || minecraft.player == null) return;
@@ -108,8 +126,14 @@ public final class MirrorLevelRenderer {
         try (MirrorPassContext pass = MirrorPassContext.begin(recursionDepth, target)) {
             MirrorRenderState renderState = MirrorRenderState.capture();
             Camera camera = new MirrorCamera();
+            Direction mirrorFacing = mirror.getBlockState().getValue(com.mirror.common.MirrorBlock.FACING);
+            Vec3 mirrorNormal = Vec3.atLowerCornerOf(mirrorFacing.getNormal());
+            Vec3 mirrorPlanePoint = Vec3.atCenterOf(mirror.getBlockPos()).add(mirrorNormal.scale(
+                    0.5 - com.mirror.common.MirrorBlock.surfaceRecession(mirror.getBlockState())));
+            List<ReflectionPlane> reflectionPath = new java.util.ArrayList<>(parentReflectionPath);
+            reflectionPath.add(new ReflectionPlane(mirrorPlanePoint, mirrorNormal));
             RenderFrame frame = new RenderFrame(mirror.getId(), recursionDepth,
-                    List.copyOf(parentChain), camera);
+                    List.copyOf(parentChain), camera, List.copyOf(reflectionPath));
             GameRendererAccess rendererAccess = gameRenderer instanceof GameRendererAccess access ? access : null;
             BlockEntityRenderDispatcher blockEntityDispatcher = minecraft.getBlockEntityRenderDispatcher();
             EntityRenderDispatcher entityRenderDispatcher = minecraft.getEntityRenderDispatcher();
@@ -156,8 +180,8 @@ public final class MirrorLevelRenderer {
                 RENDER_STACK.push(frame);
                 framePushed = true;
 
-                Direction facing = mirror.getBlockState().getValue(com.mirror.common.MirrorBlock.FACING);
-                Vec3 normal = Vec3.atLowerCornerOf(facing.getNormal());
+                Direction facing = mirrorFacing;
+                Vec3 normal = mirrorNormal;
                 Vec3 up = new Vec3(0, 1, 0);
                 Vec3 right = normal.cross(up).normalize();
                 double recession = com.mirror.common.MirrorBlock.surfaceRecession(mirror.getBlockState());
@@ -205,8 +229,12 @@ public final class MirrorLevelRenderer {
         }
     }
 
+    public record ReflectionPlane(Vec3 point, Vec3 normal) {
+    }
+
     private record RenderFrame(UUID mirrorId, int recursionDepth,
-                               List<UUID> parentChain, Camera camera) {
+                               List<UUID> parentChain, Camera camera,
+                               List<ReflectionPlane> reflectionPath) {
     }
 
     private static final class MirrorCamera extends Camera {

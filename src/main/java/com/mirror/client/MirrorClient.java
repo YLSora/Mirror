@@ -52,15 +52,11 @@ public final class MirrorClient {
     }
 
     private static void renderTick(TickEvent.RenderTickEvent event) {
-        // Requests are collected while the normal world is rendered and consumed at the
-        // beginning of the next frame. Forge fires END after GameRenderer.render() but before
-        // Minecraft blits the main target to the window; running a nested Oculus final pass in
-        // that interval corrupts the presentation state even though F2 still sees a valid main
-        // target. START keeps the same one-frame texture latency while leaving the outer render
-        // responsible for the final framebuffer state and screen blit.
+        // Mirror requests are consumed from LevelRenderer at the start of the next outer world
+        // pass, after that frame's camera/Oculus time state exists. RenderTick START only resets
+        // the deferred presentation list; rendering here would use stale temporal state.
         if (event.phase == TickEvent.Phase.START) {
             DeferredMirrorSurfaceRenderer.beginFrame();
-            MirrorTextureManager.processPending();
         }
     }
 

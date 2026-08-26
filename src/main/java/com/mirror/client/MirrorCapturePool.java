@@ -15,6 +15,7 @@ import java.util.Map;
  */
 public final class MirrorCapturePool {
     private static final int MIN_BUCKET_SIZE = 16;
+    private static final int MIN_SHADER_BUCKET_SIZE = 256;
     private static final Map<MirrorPassContext.PipelineSlot, CaptureSlot> SLOTS = new HashMap<>();
 
     private MirrorCapturePool() {
@@ -24,7 +25,9 @@ public final class MirrorCapturePool {
         if (requestedWidth <= 0 || requestedHeight <= 0) {
             throw new IllegalArgumentException("mirror capture dimensions must be positive");
         }
-        int side = bucketSide(requestedWidth, requestedHeight, GL11C.glGetInteger(GL11C.GL_MAX_TEXTURE_SIZE));
+        int minimum = OculusCompat.isShaderPackInUse() ? MIN_SHADER_BUCKET_SIZE : MIN_BUCKET_SIZE;
+        int side = bucketSide(requestedWidth, requestedHeight,
+                GL11C.glGetInteger(GL11C.GL_MAX_TEXTURE_SIZE), minimum);
         MirrorPassContext.PipelineSlot key = new MirrorPassContext.PipelineSlot(
                 recursionDepth, new MirrorPassContext.ResolutionBucket(side, side));
         return SLOTS.computeIfAbsent(key, ignored -> new CaptureSlot(key,
@@ -32,7 +35,13 @@ public final class MirrorCapturePool {
     }
 
     static int bucketSide(int requestedWidth, int requestedHeight, int maximumTextureSize) {
-        int required = Math.max(MIN_BUCKET_SIZE, Math.max(requestedWidth, requestedHeight));
+        return bucketSide(requestedWidth, requestedHeight, maximumTextureSize, MIN_BUCKET_SIZE);
+    }
+
+    private static int bucketSide(int requestedWidth, int requestedHeight, int maximumTextureSize,
+                                  int minimumBucketSize) {
+        int minimum = Math.max(MIN_BUCKET_SIZE, minimumBucketSize);
+        int required = Math.max(minimum, Math.max(requestedWidth, requestedHeight));
         int maximum = Math.max(MIN_BUCKET_SIZE, maximumTextureSize);
         if (required >= maximum) return maximum;
 

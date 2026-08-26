@@ -45,10 +45,12 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
         }
         MirrorBlockEntity master = MirrorBlock.getMasterBlockEntity(entity.getLevel(), entity.getBlockPos());
         if (master == null || master.getBlockPos().equals(entity.getBlockPos()) == false) return;
-        // A parent mirror is the aperture through which this recursive camera arrived. Drawing
-        // its surface again would overwrite the entity layer later in the block-entity pass and
-        // turn the same A -> B path into feedback instead of a second reflection.
-        if (renderingReflection && MirrorLevelRenderer.isParentMirror(master.getId())) return;
+        // RECURSIVE mode must allow ancestor mirrors to appear again: a real two-mirror chain
+        // alternates A -> B -> A -> B, with each step using a chain-isolated texture key. SHARED
+        // mode still reuses direct textures, so keep its ancestor guard to avoid cyclic feedback.
+        if (renderingReflection
+                && MirrorConfig.CLIENT.recursionMode.get() == MirrorConfig.RecursionMode.SHARED
+                && MirrorLevelRenderer.isParentMirror(master.getId())) return;
 
         Direction facing = entity.getBlockState().getValue(MirrorBlock.FACING);
         Vec3 normal = Vec3.atLowerCornerOf(facing.getNormal());
@@ -63,10 +65,10 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
         if (!reflection.viewerInFront()) return;
 
         MirrorReflectionTexture texture = !renderingReflection
-                ? MirrorTextureManager.request(entity, eye, partialTick)
+                ? MirrorTextureManager.request(entity)
                 : MirrorConfig.CLIENT.recursionMode.get() == MirrorConfig.RecursionMode.SHARED
-                ? MirrorTextureManager.requestShared(entity, partialTick)
-                : MirrorTextureManager.requestRecursive(entity, eye, partialTick);
+                ? MirrorTextureManager.requestShared(entity)
+                : MirrorTextureManager.requestRecursive(entity);
         if (texture == null) return;
         drawFace(entity, facing, recession, poseStack, buffer, texture.textureLocation(),
                 OculusCompat.shouldDeferSurfacePresentation());
@@ -92,24 +94,44 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
             return;
         }
 
-        VertexConsumer vertices = buffer.getBuffer(RenderType.entityTranslucentEmissive(texture));
         PoseStack.Pose pose = poseStack.last();
-        // Render-target textures use OpenGL's bottom-left origin. The reflected camera already
-        // supplies the mirror's horizontal reversal, so the surface must not flip either UV axis.
-        quadVertex(vertices, pose, left, bottom, 0, 0, LightTexture.FULL_BRIGHT);
-        quadVertex(vertices, pose, right, bottom, 1, 0, LightTexture.FULL_BRIGHT);
-        quadVertex(vertices, pose, right, top, 1, 1, LightTexture.FULL_BRIGHT);
-        quadVertex(vertices, pose, left, top, 0, 1, LightTexture.FULL_BRIGHT);
+        // A child mirror rendered inside an active Oculus world pass must use one of Oculus'
+        // recognized entity RenderTypes and the matching NEW_ENTITY vertex layout. Feeding the
+        // custom POSITION_COLOR_TEX surface through the block-entity buffer bypasses Oculus'
+        // entity/gbuffer routing and leaves shader-pack fallback attributes undefined, which can
+        // appear as a red/green gradient in the parent reflection. The outer completed mirror is
+        // still presented with MirrorRenderTypes.mirrorSurface(), so it remains unlit and no-cull.
+        if (MirrorLevelRenderer.isRenderingReflection() && OculusCompat.isShaderPackInUse()) {
+            VertexConsumer vertices = buffer.getBuffer(RenderType.entityTranslucentEmissive(texture));
+            entityVertex(vertices, pose, left, bottom, 0, 0);
+            entityVertex(vertices, pose, right, bottom, 1, 0);
+            entityVertex(vertices, pose, right, top, 1, 1);
+            entityVertex(vertices, pose, left, top, 0, 1);
+        } else {
+            VertexConsumer vertices = buffer.getBuffer(MirrorRenderTypes.mirrorSurface(texture));
+            surfaceVertex(vertices, pose, left, bottom, 0, 0);
+            surfaceVertex(vertices, pose, right, bottom, 1, 0);
+            surfaceVertex(vertices, pose, right, top, 1, 1);
+            surfaceVertex(vertices, pose, left, top, 0, 1);
+        }
         poseStack.popPose();
     }
 
-    private static void quadVertex(VertexConsumer vertices, PoseStack.Pose pose, float x, float y,
-                                   float u, float v, int light) {
+    private static void surfaceVertex(VertexConsumer vertices, PoseStack.Pose pose, float x, float y,
+                                      float u, float v) {
+        vertices.vertex(pose.pose(), x, y, 0.0f)
+                .color(255, 255, 255, 255)
+                .uv(u, v)
+                .endVertex();
+    }
+
+    private static void entityVertex(VertexConsumer vertices, PoseStack.Pose pose, float x, float y,
+                                     float u, float v) {
         vertices.vertex(pose.pose(), x, y, 0.0f)
                 .color(255, 255, 255, 255)
                 .uv(u, v)
                 .overlayCoords(OverlayTexture.NO_OVERLAY)
-                .uv2(light)
+                .uv2(LightTexture.FULL_BRIGHT)
                 .normal(pose.normal(), 0.0f, 0.0f, 1.0f)
                 .endVertex();
     }

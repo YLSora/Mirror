@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/** Owns the render-target cache and defers all off-screen passes until the BE pass is complete. */
+/** Owns the render-target cache and defers all off-screen passes until the next outer world frame. */
 public final class MirrorTextureManager {
     private static final Map<MirrorTextureKey, MirrorReflectionTexture> TEXTURES = new HashMap<>();
     private static final Map<MirrorTextureKey, Pending> PENDING = new HashMap<>();
@@ -24,31 +24,32 @@ public final class MirrorTextureManager {
     }
 
     /** Schedules the direct, player-view texture for a mirror. */
-    public static MirrorReflectionTexture request(MirrorBlockEntity mirror, Vec3 eye, float partialTick) {
+    public static MirrorReflectionTexture request(MirrorBlockEntity mirror) {
         MirrorTextureKey key = directKey(mirror);
         MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
-        PENDING.put(key, new Pending(key, mirror, eye, partialTick));
+        PENDING.put(key, new Pending(key, mirror, List.of()));
         return texture.hasRendered() ? texture : null;
     }
 
     /** Returns or schedules the direct texture used by SHARED nested rendering. */
-    public static MirrorReflectionTexture requestShared(MirrorBlockEntity mirror, float partialTick) {
+    public static MirrorReflectionTexture requestShared(MirrorBlockEntity mirror) {
         MirrorTextureKey key = directKey(mirror);
         MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
         if (!texture.hasRendered()) {
-            Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
-            PENDING.put(key, new Pending(key, mirror, camera.getPosition(), partialTick));
+            PENDING.put(key, new Pending(key, mirror, List.of()));
         }
         return texture.hasRendered() ? texture : null;
     }
 
     /** Schedules a texture for one recursive parent chain. */
-    public static MirrorReflectionTexture requestRecursive(MirrorBlockEntity mirror, Vec3 eye,
-                                                            float partialTick) {
+    public static MirrorReflectionTexture requestRecursive(MirrorBlockEntity mirror) {
         int depth = MirrorLevelRenderer.getChildDepth();
-        if (depth > MirrorConfig.CLIENT.maxRecursionDepth.get()) return null;
+        // recursionDepth is zero-based: the direct mirror pass is depth 0, so a child at
+        // depth 1 is already the second visible reflection. Treat maxRecursionDepth as the
+        // user-facing total reflection count: 1 = direct only, 2 = one mirror-in-mirror, etc.
+        if (depth >= MirrorConfig.CLIENT.maxRecursionDepth.get()) return null;
 
         List<UUID> parentChain = MirrorLevelRenderer.getChildParentChain();
         int[] dimensions = recursiveDimensions(mirror, depth);
@@ -56,18 +57,24 @@ public final class MirrorTextureManager {
                 dimensions[0], dimensions[1]);
         MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
-        PENDING.put(key, new Pending(key, mirror, eye, partialTick));
+        PENDING.put(key, new Pending(key, mirror, MirrorLevelRenderer.getChildReflectionPath()));
         return texture.hasRendered() ? texture : null;
     }
 
-    public static void processPending() {
+    /**
+     * Consumes requests from the previous outer frame with the current frame's camera and tick delta.
+     * This is invoked from LevelRenderer immediately before its normal framebuffer clear, after Oculus
+     * has established the current frame's temporal uniforms but before the outer shader pipeline begins.
+     */
+    public static void processPending(Camera camera, float partialTick) {
         if (PENDING.isEmpty()) return;
         Minecraft minecraft = Minecraft.getInstance();
-        if (!(minecraft.level instanceof ClientLevel)) {
+        if (!(minecraft.level instanceof ClientLevel) || camera == null) {
             clear();
             return;
         }
 
+        Vec3 mainEye = camera.getPosition().add(MirrorLevelRenderer.getMainBobEyeOffset());
         List<Pending> pending = new ArrayList<>(PENDING.values());
         PENDING.clear();
         // A parent capture samples completed child surfaces. Refresh the deepest textures first
@@ -76,8 +83,10 @@ public final class MirrorTextureManager {
                 (Pending value) -> value.key().depth()).reversed());
         for (Pending value : pending) {
             MirrorReflectionTexture texture = TEXTURES.get(value.key());
-            if (texture != null) {
-                texture.render(minecraft.level, value.mirror(), value.eye(), value.partialTick());
+            if (texture == null) continue;
+            Vec3 eye = MirrorLevelRenderer.resolveReflectionPath(mainEye, value.parentPath());
+            if (eye != null) {
+                texture.render(minecraft.level, value.mirror(), eye, partialTick, value.parentPath());
             }
         }
     }
@@ -161,6 +170,10 @@ public final class MirrorTextureManager {
                 key.depth(), key.parentChain()));
     }
 
-    private record Pending(MirrorTextureKey key, MirrorBlockEntity mirror, Vec3 eye, float partialTick) {
+    private record Pending(MirrorTextureKey key, MirrorBlockEntity mirror,
+                           List<MirrorLevelRenderer.ReflectionPlane> parentPath) {
+        private Pending {
+            parentPath = List.copyOf(parentPath);
+        }
     }
 }

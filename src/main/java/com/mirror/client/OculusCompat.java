@@ -28,6 +28,10 @@ public final class OculusCompat {
         return LOADED && runtime().isShadowPass();
     }
 
+    public static boolean isShaderPackInUse() {
+        return LOADED && runtime().isShaderPackInUse();
+    }
+
     public static boolean shouldDeferSurfacePresentation() {
         return LOADED && !isMirrorPass() && runtime().isShaderPackInUse() && !runtime().isShadowPass();
     }
