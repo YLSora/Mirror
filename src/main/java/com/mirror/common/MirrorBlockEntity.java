@@ -10,6 +10,7 @@ import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.jetbrains.annotations.Nullable;
 
@@ -63,6 +64,28 @@ public final class MirrorBlockEntity extends BlockEntity {
                 .add(ScreenRect.rightOf(normal).scale((1 - connectedWidth) * 0.5))
                 .add(new Vec3(0, 1, 0).scale((connectedHeight - 1) * 0.5));
         return new ScreenRect(center, normal, connectedWidth, connectedHeight);
+    }
+
+    @Override
+    public AABB getRenderBoundingBox() {
+        AABB box = new AABB(worldPosition);
+        Direction facing = getBlockState().getValue(MirrorBlock.FACING);
+        AABB connectedBounds = switch (facing) {
+            case NORTH -> box.expandTowards(-connectedWidth + 1, connectedHeight - 1, 0);
+            case SOUTH -> box.expandTowards(connectedWidth - 1, connectedHeight - 1, 0);
+            case EAST -> box.expandTowards(0, connectedHeight - 1, -connectedWidth + 1);
+            case WEST -> box.expandTowards(0, connectedHeight - 1, connectedWidth - 1);
+            default -> box;
+        };
+        return connectedBounds.inflate(1.0 / 16.0);
+    }
+
+    public double distanceToRenderBoundsSqr(Vec3 point) {
+        AABB bounds = getRenderBoundingBox();
+        double dx = Math.max(Math.max(bounds.minX - point.x, 0.0), point.x - bounds.maxX);
+        double dy = Math.max(Math.max(bounds.minY - point.y, 0.0), point.y - bounds.maxY);
+        double dz = Math.max(Math.max(bounds.minZ - point.z, 0.0), point.z - bounds.maxZ);
+        return dx * dx + dy * dy + dz * dz;
     }
 
     public static void serverTick(Level level, BlockPos pos, BlockState state, MirrorBlockEntity mirror) {

@@ -9,6 +9,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -25,7 +26,7 @@ public final class MirrorTextureManager {
     /** Schedules the direct, player-view texture for a mirror. */
     public static MirrorReflectionTexture request(MirrorBlockEntity mirror, Vec3 eye, float partialTick) {
         MirrorTextureKey key = directKey(mirror);
-        MirrorReflectionTexture texture = getOrCreate(key);
+        MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
         PENDING.put(key, new Pending(key, mirror, eye, partialTick));
         return texture.hasRendered() ? texture : null;
@@ -34,7 +35,7 @@ public final class MirrorTextureManager {
     /** Returns or schedules the direct texture used by SHARED nested rendering. */
     public static MirrorReflectionTexture requestShared(MirrorBlockEntity mirror, float partialTick) {
         MirrorTextureKey key = directKey(mirror);
-        MirrorReflectionTexture texture = getOrCreate(key);
+        MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
         if (!texture.hasRendered()) {
             Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
@@ -53,7 +54,7 @@ public final class MirrorTextureManager {
         int[] dimensions = recursiveDimensions(mirror, depth);
         MirrorTextureKey key = new MirrorTextureKey(mirror.getId(), parentChain, depth,
                 dimensions[0], dimensions[1]);
-        MirrorReflectionTexture texture = getOrCreate(key);
+        MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
         PENDING.put(key, new Pending(key, mirror, eye, partialTick));
         return texture.hasRendered() ? texture : null;
@@ -69,16 +70,15 @@ public final class MirrorTextureManager {
 
         List<Pending> pending = new ArrayList<>(PENDING.values());
         PENDING.clear();
-        MirrorLevelRenderer.setRenderingReflection(true);
-        try {
-            for (Pending value : pending) {
-                MirrorReflectionTexture texture = TEXTURES.get(value.key());
-                if (texture != null) {
-                    texture.render(minecraft.level, value.mirror(), value.eye(), value.partialTick());
-                }
+        // A parent capture samples completed child surfaces. Refresh the deepest textures first
+        // so depth 0 never races a child discovered during the previous frame.
+        pending.sort(Comparator.comparingInt(
+                (Pending value) -> value.key().depth()).reversed());
+        for (Pending value : pending) {
+            MirrorReflectionTexture texture = TEXTURES.get(value.key());
+            if (texture != null) {
+                texture.render(minecraft.level, value.mirror(), value.eye(), value.partialTick());
             }
-        } finally {
-            MirrorLevelRenderer.setRenderingReflection(false);
         }
     }
 
@@ -94,15 +94,17 @@ public final class MirrorTextureManager {
     }
 
     public static void clear() {
+        OculusCompat.clearMirrorPipelines();
         PENDING.clear();
         TEXTURES.values().forEach(MirrorReflectionTexture::close);
         TEXTURES.clear();
+        MirrorCapturePool.clear();
         MirrorLevelRenderer.clearContext();
     }
 
     private static MirrorTextureKey directKey(MirrorBlockEntity mirror) {
         Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
-        double distance = camera.getPosition().distanceTo(Vec3.atCenterOf(mirror.getBlockPos()));
+        double distance = Math.sqrt(mirror.distanceToRenderBoundsSqr(camera.getPosition()));
         int[] dimensions = directDimensions(mirror, distance);
         return new MirrorTextureKey(mirror.getId(), List.of(), 0, dimensions[0], dimensions[1]);
     }
@@ -126,10 +128,37 @@ public final class MirrorTextureManager {
         };
     }
 
-    private static MirrorReflectionTexture getOrCreate(MirrorTextureKey key) {
+    private static MirrorReflectionTexture getOrCreate(MirrorTextureKey key, MirrorBlockEntity mirror) {
         if (key.width() <= 0 || key.height() <= 0) return null;
-        return TEXTURES.computeIfAbsent(key,
-                ignored -> new MirrorReflectionTexture(key.width(), key.height(), key.depth(), key.parentChain()));
+        MirrorReflectionTexture reusable = null;
+        java.util.Iterator<Map.Entry<MirrorTextureKey, MirrorReflectionTexture>> entries =
+                TEXTURES.entrySet().iterator();
+        while (entries.hasNext()) {
+            Map.Entry<MirrorTextureKey, MirrorReflectionTexture> entry = entries.next();
+            MirrorTextureKey oldKey = entry.getKey();
+            boolean sameView = oldKey.mirrorId().equals(key.mirrorId())
+                    && oldKey.depth() == key.depth()
+                    && oldKey.parentChain().equals(key.parentChain());
+            if (!sameView || oldKey.equals(key)) continue;
+
+            MirrorReflectionTexture oldTexture = entry.getValue();
+            entries.remove();
+            PENDING.remove(oldKey);
+            if (oldTexture.reuseForChangedLayout(key.width(), key.height(),
+                    mirror.getScreenPixelWidth(), mirror.getScreenPixelHeight())) {
+                reusable = oldTexture;
+            } else {
+                oldTexture.close();
+            }
+            break;
+        }
+        if (reusable != null) {
+            TEXTURES.put(key, reusable);
+            return reusable;
+        }
+        return TEXTURES.computeIfAbsent(key, ignored -> new MirrorReflectionTexture(
+                key.width(), key.height(), mirror.getScreenPixelWidth(), mirror.getScreenPixelHeight(),
+                key.depth(), key.parentChain()));
     }
 
     private record Pending(MirrorTextureKey key, MirrorBlockEntity mirror, Vec3 eye, float partialTick) {

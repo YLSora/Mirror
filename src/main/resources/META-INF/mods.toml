@@ -16,6 +16,9 @@ config="mirror.mixins.json"
 [[mixins]]
 config="mirror_bridge.mixins.json"
 
+[[mixins]]
+config="mirror_oculus.mixins.json"
+
 [[dependencies.${mod_id}]]
 modId="forge"
 mandatory=true
@@ -29,3 +32,17 @@ mandatory=true
 versionRange="${minecraft_version_range}"
 ordering="NONE"
 side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="embeddium"
+mandatory=false
+versionRange="[0.3.31,0.3.32)"
+ordering="AFTER"
+side="CLIENT"
+
+[[dependencies.${mod_id}]]
+modId="oculus"
+mandatory=false
+versionRange="[0,)"
+ordering="AFTER"
+side="CLIENT"

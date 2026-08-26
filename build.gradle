@@ -50,15 +50,19 @@ mixin {
     add sourceSets.main, 'mirror.refmap.json'
     config 'mirror.mixins.json'
     config 'mirror_bridge.mixins.json'
+    config 'mirror_oculus.mixins.json'
 }
 
 repositories {
     maven { url = 'https://maven.minecraftforge.net' }
+    maven { url = 'https://api.modrinth.com/maven' }
     mavenCentral()
 }
 
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    compileOnly fg.deobf("maven.modrinth:oculus:${oculus_version}")
+    compileOnly fg.deobf("maven.modrinth:embeddium:${embeddium_version}")
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }
@@ -120,8 +124,8 @@ jar {
                 'Implementation-Title'    : project.name,
                 'Implementation-Version'  : project.jar.archiveVersion,
                 'Implementation-Vendor'   : mod_author,
-                'Built-On-Minecraft'      : minecraft_version,
-                'MixinConfigs'            : 'mirror.mixins.json,mirror_bridge.mixins.json'
+            'Built-On-Minecraft'      : minecraft_version,
+            'MixinConfigs'            : 'mirror.mixins.json,mirror_bridge.mixins.json,mirror_oculus.mixins.json'
         ])
     }
     finalizedBy 'reobfJar'

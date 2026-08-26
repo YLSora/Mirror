@@ -3,7 +3,6 @@ package com.mirror.bridge;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import net.minecraft.client.renderer.LevelRenderer;
-import net.minecraft.client.renderer.PostChain;
 import net.minecraft.client.renderer.ViewArea;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
@@ -49,18 +48,4 @@ public interface LevelRendererBridge {
     @Accessor("prevCamRotX") void mirror$setPrevCamRotX(double value);
     @Accessor("prevCamRotY") double mirror$getPrevCamRotY();
     @Accessor("prevCamRotY") void mirror$setPrevCamRotY(double value);
-    @Accessor("transparencyChain") PostChain mirror$getTransparencyChain();
-    @Accessor("transparencyChain") void mirror$setTransparencyChain(PostChain value);
-    @Accessor("translucentTarget") RenderTarget mirror$getTranslucentTarget();
-    @Accessor("translucentTarget") void mirror$setTranslucentTarget(RenderTarget value);
-    @Accessor("itemEntityTarget") RenderTarget mirror$getItemEntityTarget();
-    @Accessor("itemEntityTarget") void mirror$setItemEntityTarget(RenderTarget value);
-    @Accessor("particlesTarget") RenderTarget mirror$getParticlesTarget();
-    @Accessor("particlesTarget") void mirror$setParticlesTarget(RenderTarget value);
-    @Accessor("weatherTarget") RenderTarget mirror$getWeatherTarget();
-    @Accessor("weatherTarget") void mirror$setWeatherTarget(RenderTarget value);
-    @Accessor("cloudsTarget") RenderTarget mirror$getCloudsTarget();
-    @Accessor("cloudsTarget") void mirror$setCloudsTarget(RenderTarget value);
-    @Accessor("entityTarget") RenderTarget mirror$getEntityTarget();
-    @Accessor("entityTarget") void mirror$setEntityTarget(RenderTarget value);
 }

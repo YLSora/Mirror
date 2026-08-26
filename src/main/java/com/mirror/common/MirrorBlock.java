@@ -159,7 +159,13 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
     public void neighborChanged(BlockState state, Level level, BlockPos pos, Block block,
                                 BlockPos fromPos, boolean isMoving) {
         super.neighborChanged(state, level, pos, block, fromPos, isMoving);
-        if (!level.isClientSide && level.getBlockState(pos).getBlock() == this) {
+        if (level.isClientSide || level.getBlockState(pos).getBlock() != this) return;
+
+        // Addition paths that do not call setPlacedBy (commands, structures and GameTest) still
+        // need to connect. Removal is handled once by the removed block's onRemove; rebuilding
+        // from every surviving neighbour here would process the same component repeatedly.
+        BlockState changedNeighbour = level.getBlockState(fromPos);
+        if (connectionMatches(state, changedNeighbour)) {
             MirrorGrid.rebuildAround(level, pos);
         }
     }
@@ -170,18 +176,7 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
         if (!state.is(newState.getBlock())) {
             CompoundTag removedOwner = level.getBlockEntity(pos) instanceof MirrorBlockEntity entity
                     ? entity.saveWithoutMetadata() : null;
-            for (Direction direction : Direction.values()) {
-                if (direction.getAxis() != Direction.Axis.Y &&
-                        level.getBlockState(pos.relative(direction)).getBlock() == this) {
-                    MirrorGrid.rebuildAround(level, pos.relative(direction), state, removedOwner);
-                }
-            }
-            if (level.getBlockState(pos.above()).getBlock() == this) {
-                MirrorGrid.rebuildAround(level, pos.above(), state, removedOwner);
-            }
-            if (level.getBlockState(pos.below()).getBlock() == this) {
-                MirrorGrid.rebuildAround(level, pos.below(), state, removedOwner);
-            }
+            MirrorGrid.rebuildAfterRemoval(level, pos, state, removedOwner);
         }
         super.onRemove(state, level, pos, newState, movedByPiston);
     }

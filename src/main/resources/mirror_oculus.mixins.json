@@ -1,0 +1,17 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "refmap": "mirror.refmap.json",
+  "package": "com.mirror.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "priority": 1100,
+  "client": [
+    "OculusFrameCounterMixin",
+    "OculusTimerMixin",
+    "OculusFinalSurfaceMixin",
+    "OculusPipelineManagerMixin",
+    "OculusLevelRendererMixin",
+    "OculusTerrainProgramCacheMixin",
+    "OculusUniformTypeValidationMixin"
+  ]
+}

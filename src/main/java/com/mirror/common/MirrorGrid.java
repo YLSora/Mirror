@@ -40,6 +40,30 @@ public final class MirrorGrid {
         rebuild(level, seed, mirror, removedOwner);
     }
 
+    /** Rebuilds every surviving component adjacent to a removed mirror exactly once. */
+    public static void rebuildAfterRemoval(Level level, BlockPos removedPos, BlockState reference,
+                                           @Nullable CompoundTag removedOwner) {
+        if (level.isClientSide || REBUILDING.get()) return;
+        if (!(reference.getBlock() instanceof MirrorBlock mirror)) return;
+
+        Direction facing = reference.getValue(MirrorBlock.FACING);
+        Set<BlockPos> visited = new HashSet<>();
+        boolean identityTransferred = false;
+        for (Direction direction : new Direction[]{Direction.DOWN, facing.getClockWise(),
+                facing.getCounterClockWise(), Direction.UP}) {
+            BlockPos seed = removedPos.relative(direction);
+            if (visited.contains(seed) || !mirror.connectionMatches(reference, level.getBlockState(seed))) {
+                continue;
+            }
+
+            Set<Cell> component = collectComponent(level, seed, mirror, mirror.maxConnectedSize());
+            component.forEach(cell -> visited.add(cell.pos()));
+            CompoundTag owner = !identityTransferred ? removedOwner : null;
+            rebuild(level, seed, mirror, owner);
+            if (owner != null) identityTransferred = true;
+        }
+    }
+
     private static void rebuild(Level level, BlockPos seed, MirrorBlock mirror) {
         rebuild(level, seed, mirror, null);
     }

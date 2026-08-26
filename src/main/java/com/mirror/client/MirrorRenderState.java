@@ -1,6 +1,7 @@
 package com.mirror.client;
 
 import com.mojang.blaze3d.shaders.FogShape;
+import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexSorting;
@@ -14,6 +15,9 @@ import org.lwjgl.opengl.GL11C;
 import org.lwjgl.opengl.GL14C;
 import org.lwjgl.opengl.GL20C;
 import org.lwjgl.opengl.GL13C;
+import org.lwjgl.opengl.GL15C;
+import org.lwjgl.opengl.GL21C;
+import org.lwjgl.opengl.GL30C;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -33,9 +37,20 @@ final class MirrorRenderState {
     private final List<PoseData> modelViewStack;
     private final Matrix4f textureMatrix;
     private final int[] viewport;
+    private final int vertexArray;
+    private final int arrayBuffer;
+    private final int elementArrayBuffer;
+    private final int pixelPackBuffer;
+    private final int pixelUnpackBuffer;
+    private final int drawFramebuffer;
+    private final int readFramebuffer;
+    private final int drawBuffer;
+    private final int readBuffer;
     private final int activeTexture;
     private final int[] textures;
+    private final int[] texture2dBindings;
     private final ShaderInstance shader;
+    private final int program;
     private final float[] shaderColor;
     private final float fogStart;
     private final float fogEnd;
@@ -57,6 +72,9 @@ final class MirrorRenderState {
     private final int blendDstAlpha;
     private final int blendEquation;
     private final boolean[] colorMask;
+    private final float[] clearColor;
+    private final float clearDepth;
+    private final int clearStencil;
 
     private MirrorRenderState() {
         projection = new Matrix4f(RenderSystem.getProjectionMatrix());
@@ -67,6 +85,7 @@ final class MirrorRenderState {
         modelViewStack = captureModelViewStack();
         textureMatrix = new Matrix4f(RenderSystem.getTextureMatrix());
         shader = RenderSystem.getShader();
+        program = GL20C.glGetInteger(GL20C.GL_CURRENT_PROGRAM);
         shaderColor = RenderSystem.getShaderColor().clone();
         fogStart = RenderSystem.getShaderFogStart();
         fogEnd = RenderSystem.getShaderFogEnd();
@@ -81,9 +100,29 @@ final class MirrorRenderState {
         GL11C.glGetIntegerv(GL11C.GL_VIEWPORT, viewportBuffer);
         viewport = new int[]{viewportBuffer.get(0), viewportBuffer.get(1),
                 viewportBuffer.get(2), viewportBuffer.get(3)};
+        vertexArray = GL30C.glGetInteger(GL30C.GL_VERTEX_ARRAY_BINDING);
+        arrayBuffer = GL15C.glGetInteger(GL15C.GL_ARRAY_BUFFER_BINDING);
+        elementArrayBuffer = GL15C.glGetInteger(GL15C.GL_ELEMENT_ARRAY_BUFFER_BINDING);
+        pixelPackBuffer = GL21C.glGetInteger(GL21C.GL_PIXEL_PACK_BUFFER_BINDING);
+        pixelUnpackBuffer = GL21C.glGetInteger(GL21C.GL_PIXEL_UNPACK_BUFFER_BINDING);
+        drawFramebuffer = GL30C.glGetInteger(GL30C.GL_DRAW_FRAMEBUFFER_BINDING);
+        readFramebuffer = GL30C.glGetInteger(GL30C.GL_READ_FRAMEBUFFER_BINDING);
+        drawBuffer = GL11C.glGetInteger(GL11C.GL_DRAW_BUFFER);
+        readBuffer = GL11C.glGetInteger(GL11C.GL_READ_BUFFER);
         activeTexture = GL11C.glGetInteger(GL13C.GL_ACTIVE_TEXTURE);
         textures = new int[]{RenderSystem.getShaderTexture(0), RenderSystem.getShaderTexture(1),
                 RenderSystem.getShaderTexture(2), RenderSystem.getShaderTexture(3)};
+        // Minecraft's GlStateManager exposes 128 texture slots, but its active-texture
+        // bookkeeping is not safe at the driver-reported upper bound. Iris/Oculus uses the
+        // low sampler range for all world and composite passes; restore that complete range.
+        int textureUnitCount = Math.min(32,
+                Math.max(1, GL20C.glGetInteger(GL20C.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)));
+        texture2dBindings = new int[textureUnitCount];
+        for (int unit = 0; unit < textureUnitCount; unit++) {
+            GL13C.glActiveTexture(GL13C.GL_TEXTURE0 + unit);
+            texture2dBindings[unit] = GL11C.glGetInteger(GL11C.GL_TEXTURE_BINDING_2D);
+        }
+        GL13C.glActiveTexture(activeTexture);
         depthTest = GL11C.glIsEnabled(GL11C.GL_DEPTH_TEST);
         blend = GL11C.glIsEnabled(GL11C.GL_BLEND);
         cull = GL11C.glIsEnabled(GL11C.GL_CULL_FACE);
@@ -96,6 +135,9 @@ final class MirrorRenderState {
         blendDstAlpha = GL11C.glGetInteger(GL14C.GL_BLEND_DST_ALPHA);
         blendEquation = GL11C.glGetInteger(GL20C.GL_BLEND_EQUATION_RGB);
         colorMask = captureColorMask();
+        clearColor = captureClearColor();
+        clearDepth = GL11C.glGetFloat(GL11C.GL_DEPTH_CLEAR_VALUE);
+        clearStencil = GL11C.glGetInteger(GL11C.GL_STENCIL_CLEAR_VALUE);
     }
 
     static MirrorRenderState capture() {
@@ -104,6 +146,15 @@ final class MirrorRenderState {
 
     void restore() {
         RenderSystem.viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        GlStateManager._glBindVertexArray(vertexArray);
+        GlStateManager._glBindBuffer(GL15C.GL_ARRAY_BUFFER, arrayBuffer);
+        GlStateManager._glBindBuffer(GL15C.GL_ELEMENT_ARRAY_BUFFER, elementArrayBuffer);
+        GlStateManager._glBindBuffer(GL21C.GL_PIXEL_PACK_BUFFER, pixelPackBuffer);
+        GlStateManager._glBindBuffer(GL21C.GL_PIXEL_UNPACK_BUFFER, pixelUnpackBuffer);
+        GL30C.glBindFramebuffer(GL30C.GL_DRAW_FRAMEBUFFER, drawFramebuffer);
+        GL30C.glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER, readFramebuffer);
+        GL11C.glDrawBuffer(drawBuffer);
+        GL11C.glReadBuffer(readBuffer);
         RenderSystem.setProjectionMatrix(projection, vertexSorting);
         restoreRenderSystemField("savedProjectionMatrix", savedProjection);
         restoreRenderSystemField("savedVertexSorting", savedVertexSorting);
@@ -112,6 +163,12 @@ final class MirrorRenderState {
         RenderSystem.setInverseViewRotationMatrix(inverseViewRotation);
         RenderSystem.setTextureMatrix(textureMatrix);
         RenderSystem.setShader(() -> shader);
+        // Oculus 1.8.0 tracks _glUseProgram in a static redundant-bind cache. Restore both the
+        // driver binding and that cache before the next outer frame.
+        GL20C.glUseProgram(0);
+        GlStateManager._glUseProgram(0);
+        GL20C.glUseProgram(program);
+        GlStateManager._glUseProgram(program);
         RenderSystem.setShaderColor(shaderColor[0], shaderColor[1], shaderColor[2], shaderColor[3]);
         RenderSystem.setShaderFogStart(fogStart);
         RenderSystem.setShaderFogEnd(fogEnd);
@@ -122,6 +179,14 @@ final class MirrorRenderState {
         restoreShaderGameTime(shaderGameTime);
         restoreShaderLights(shaderLights);
         for (int i = 0; i < textures.length; i++) RenderSystem.setShaderTexture(i, textures[i]);
+        for (int unit = 0; unit < texture2dBindings.length; unit++) {
+            RenderSystem.activeTexture(GL13C.GL_TEXTURE0 + unit);
+            if (unit < 12) {
+                RenderSystem.bindTexture(texture2dBindings[unit]);
+            } else {
+                GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, texture2dBindings[unit]);
+            }
+        }
         RenderSystem.activeTexture(activeTexture);
 
         RenderSystem.depthFunc(depthFunc);
@@ -129,6 +194,9 @@ final class MirrorRenderState {
         RenderSystem.blendFuncSeparate(blendSrcRgb, blendDstRgb, blendSrcAlpha, blendDstAlpha);
         RenderSystem.blendEquation(blendEquation);
         RenderSystem.colorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
+        GL11C.glClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+        GL11C.glClearDepth(clearDepth);
+        GL11C.glClearStencil(clearStencil);
         setState(GL11C.GL_DEPTH_TEST, depthTest, RenderSystem::enableDepthTest, RenderSystem::disableDepthTest);
         setState(GL11C.GL_BLEND, blend, RenderSystem::enableBlend, RenderSystem::disableBlend);
         setState(GL11C.GL_CULL_FACE, cull, RenderSystem::enableCull, RenderSystem::disableCull);
@@ -140,6 +208,12 @@ final class MirrorRenderState {
         ByteBuffer mask = BufferUtils.createByteBuffer(4);
         GL11C.glGetBooleanv(GL11C.GL_COLOR_WRITEMASK, mask);
         return new boolean[]{mask.get(0) != 0, mask.get(1) != 0, mask.get(2) != 0, mask.get(3) != 0};
+    }
+
+    private static float[] captureClearColor() {
+        java.nio.FloatBuffer value = BufferUtils.createFloatBuffer(4);
+        GL11C.glGetFloatv(GL11C.GL_COLOR_CLEAR_VALUE, value);
+        return new float[]{value.get(0), value.get(1), value.get(2), value.get(3)};
     }
 
     private static void restoreShaderGameTime(float value) {

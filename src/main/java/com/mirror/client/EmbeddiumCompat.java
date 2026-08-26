@@ -16,4 +16,15 @@ public final class EmbeddiumCompat {
     public static boolean ownsSectionCulling() {
         return LOADED;
     }
+
+    public static void verifySupportedVersion() {
+        if (!LOADED) return;
+        String version = net.minecraftforge.fml.ModList.get().getModContainerById("embeddium")
+                .orElseThrow(() -> new IllegalStateException(
+                        "Embeddium was reported as loaded but has no mod metadata"))
+                .getModInfo().getVersion().toString();
+        if (!"0.3.31+mc1.20.1".equals(version)) {
+            throw new IllegalStateException("Mirror supports Embeddium 0.3.31+mc1.20.1 only; found " + version);
+        }
+    }
 }

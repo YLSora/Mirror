@@ -36,7 +36,6 @@ out vec4 fragColor;
 const float DISTORTION   = 0.17;
 const float EDGE_WEAR    = 0.2;
 const float SCRATCH      = 0.02;
-const float ROUGHNESS    = 0.5;
 const float REFLECTIVITY = 0.9;
 // Drop-shadow along the bottom/right outer edge: how far the 1px band is blended toward the
 // shadow color. 0 = none, 1 = fully shadow color.
@@ -118,18 +117,11 @@ void main() {
 
     vec2 duv = uv + (warp - 0.5) * DISTORTION * 0.05;
 
-    // ---------- REFLECTION BLUR ----------
-    vec3 refl = vec3(0.0);
-    float total = 0.0;
-
-    for (int i = 0; i < 5; i++) {
-        float a = float(i) / 5.0 * 6.2831853;
-        vec2 offset = vec2(cos(a), sin(a)) * ROUGHNESS * 0.002;
-
-        refl += texture(Sampler0, duv + offset).rgb;
-        total += 1.0;
-    }
-    refl /= total;
+    // Sampler0 already contains the completed Oculus/vanilla world pass. A second multi-tap
+    // blur here compounds shader-pack post processing and recursive resolution decay, making
+    // nested mirrors disproportionately soft. Preserve the material warp but sample the result
+    // only once.
+    vec3 refl = texture(Sampler0, duv).rgb;
 
     // ---------- BASE ----------
     // Tile the base material one full copy per block, pixel-perfect with the framebuffer.

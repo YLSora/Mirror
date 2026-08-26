@@ -10,12 +10,11 @@ import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.Direction;
-import net.minecraft.world.level.LightLayer;
-import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<MirrorBlockEntity> {
@@ -30,34 +29,26 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
     }
 
     @Override
-    public boolean shouldRenderOffScreen(MirrorBlockEntity entity) {
-        return true;
-    }
-
-    public AABB getRenderBoundingBox(MirrorBlockEntity entity) {
-        Direction facing = entity.getBlockState().getValue(MirrorBlock.FACING);
-        int width = entity.getConnectedWidth();
-        int height = entity.getConnectedHeight();
-        AABB box = new AABB(entity.getBlockPos());
-        return switch (facing) {
-            case NORTH -> box.expandTowards(-width + 1, height - 1, 0);
-            case SOUTH -> box.expandTowards(width - 1, height - 1, 0);
-            case EAST -> box.expandTowards(0, height - 1, -width + 1);
-            case WEST -> box.expandTowards(0, height - 1, width - 1);
-            default -> box;
-        };
+    public boolean shouldRender(MirrorBlockEntity entity, Vec3 cameraPos) {
+        double viewDistance = getViewDistance();
+        return entity.distanceToRenderBoundsSqr(cameraPos) <= viewDistance * viewDistance;
     }
 
     @Override
     public void render(MirrorBlockEntity entity, float partialTick, PoseStack poseStack,
                        MultiBufferSource buffer, int packedLight, int packedOverlay) {
         boolean renderingReflection = MirrorTextureManager.isRenderingReflection();
+        if (OculusCompat.isShadowPass()) return;
         if (renderingReflection) {
             MirrorConfig.RecursionMode mode = MirrorConfig.CLIENT.recursionMode.get();
-            if (mode == MirrorConfig.RecursionMode.OFF || MirrorLevelRenderer.isMirrorInCurrentChain(entity)) return;
+            if (mode == MirrorConfig.RecursionMode.OFF) return;
         }
         MirrorBlockEntity master = MirrorBlock.getMasterBlockEntity(entity.getLevel(), entity.getBlockPos());
         if (master == null || master.getBlockPos().equals(entity.getBlockPos()) == false) return;
+        // A parent mirror is the aperture through which this recursive camera arrived. Drawing
+        // its surface again would overwrite the entity layer later in the block-entity pass and
+        // turn the same A -> B path into feedback instead of a second reflection.
+        if (renderingReflection && MirrorLevelRenderer.isParentMirror(master.getId())) return;
 
         Direction facing = entity.getBlockState().getValue(MirrorBlock.FACING);
         Vec3 normal = Vec3.atLowerCornerOf(facing.getNormal());
@@ -77,11 +68,13 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
                 ? MirrorTextureManager.requestShared(entity, partialTick)
                 : MirrorTextureManager.requestRecursive(entity, eye, partialTick);
         if (texture == null) return;
-        drawFace(entity, facing, recession, poseStack, buffer, texture.textureLocation());
+        drawFace(entity, facing, recession, poseStack, buffer, texture.textureLocation(),
+                OculusCompat.shouldDeferSurfacePresentation());
     }
 
     private static void drawFace(MirrorBlockEntity entity, Direction facing, double recession,
-                                 PoseStack poseStack, MultiBufferSource buffer, net.minecraft.resources.ResourceLocation texture) {
+                                 PoseStack poseStack, MultiBufferSource buffer,
+                                 net.minecraft.resources.ResourceLocation texture, boolean defer) {
         poseStack.pushPose();
         poseStack.translate(0.5, 0.5, 0.5);
         poseStack.mulPose(Axis.YP.rotationDegrees(180.0f - facing.toYRot()));
@@ -93,17 +86,20 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
         float right = 0.5f - INSET;
         float bottom = -0.5f + INSET;
         float top = height - 0.5f - INSET;
-        int sky = entity.getLevel().getBrightness(LightLayer.SKY, entity.getBlockPos().relative(facing));
-        int light = LightTexture.pack(15, sky);
-        VertexConsumer vertices = buffer.getBuffer(MirrorRenderTypes.material(texture,
-                entity.getConnectedWidth(), entity.getConnectedHeight()));
+        if (defer) {
+            DeferredMirrorSurfaceRenderer.submit(texture, poseStack.last(), left, right, bottom, top);
+            poseStack.popPose();
+            return;
+        }
+
+        VertexConsumer vertices = buffer.getBuffer(RenderType.entityTranslucentEmissive(texture));
         PoseStack.Pose pose = poseStack.last();
         // Render-target textures use OpenGL's bottom-left origin. The reflected camera already
         // supplies the mirror's horizontal reversal, so the surface must not flip either UV axis.
-        quadVertex(vertices, pose, left, bottom, 0, 0, light);
-        quadVertex(vertices, pose, right, bottom, 1, 0, light);
-        quadVertex(vertices, pose, right, top, 1, 1, light);
-        quadVertex(vertices, pose, left, top, 0, 1, light);
+        quadVertex(vertices, pose, left, bottom, 0, 0, LightTexture.FULL_BRIGHT);
+        quadVertex(vertices, pose, right, bottom, 1, 0, LightTexture.FULL_BRIGHT);
+        quadVertex(vertices, pose, right, top, 1, 1, LightTexture.FULL_BRIGHT);
+        quadVertex(vertices, pose, left, top, 0, 1, LightTexture.FULL_BRIGHT);
         poseStack.popPose();
     }
 

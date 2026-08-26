@@ -7,8 +7,6 @@
   "client": [
     "LevelRendererMixin",
     "FrustumMixin",
-    "OculusPipelineMixin",
-    "MinecraftMixin",
     "MinecraftAccess",
     "GameRendererAccess",
     "GameRendererMixin",

@@ -2,7 +2,6 @@ package com.mirror.mixin;
 
 import net.minecraft.client.Camera;
 import net.minecraft.client.renderer.GameRenderer;
-import net.minecraft.client.renderer.PostChain;
 import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
@@ -22,17 +21,4 @@ public interface GameRendererAccess {
     @Accessor("renderDistance")
     void mirror$setRenderDistance(float value);
 
-    @Accessor("postEffect")
-    PostChain mirror$getPostEffect();
-
-    @Mutable
-    @Accessor("postEffect")
-    void mirror$setPostEffect(PostChain value);
-
-    @Accessor("effectActive")
-    boolean mirror$isEffectActive();
-
-    @Mutable
-    @Accessor("effectActive")
-    void mirror$setEffectActive(boolean value);
 }

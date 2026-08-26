@@ -1,33 +1,13 @@
 package com.mirror.client;
 
+import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraftforge.fml.ModList;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-/**
- * Optional Oculus/Iris state isolation.  No Oculus type is referenced in this class, so the
- * client can load normally when shaders are not installed.  Oculus changes package-private
- * pipeline state between releases; the small reflective adapter deliberately snapshots only
- * mutable pipeline/frame/shadow/captured-state fields and restores them in reverse order.
- */
+/** Optional boundary for an installed Oculus runtime. */
 public final class OculusCompat {
-    private static final boolean LOADED = ModList.get().isLoaded("oculus")
-            || ModList.get().isLoaded("iris");
-    private static final String[] PIPELINE_CLASSES = {
-            "net.irisshaders.iris.Iris",
-            "net.irisshaders.iris.pipeline.PipelineManager",
-            "net.irisshaders.iris.pipeline.IrisRenderingPipeline",
-            "net.irisshaders.iris.shadows.ShadowRenderer",
-            "net.coderbot.iris.Iris",
-            "net.coderbot.iris.pipeline.PipelineManager",
-            "net.coderbot.iris.shadows.ShadowRenderer"
-    };
-    private static volatile boolean mirrorPass;
+    private static final boolean LOADED = ModList.get().isLoaded("oculus");
+    private static final ThreadLocal<Integer> TRANSACTION_DEPTH = ThreadLocal.withInitial(() -> 0);
+    private static final Runtime RUNTIME = loadRuntime();
 
     private OculusCompat() {
     }
@@ -36,131 +16,104 @@ public final class OculusCompat {
         return LOADED;
     }
 
-    public static void beginPipelineHook() {
-        mirrorPass = true;
+    public static void initialize() {
+        if (LOADED) runtime().initialize();
     }
 
-    public static void endPipelineHook() {
-        mirrorPass = false;
+    public static boolean isMirrorPass() {
+        return TRANSACTION_DEPTH.get() > 0;
     }
 
-    public static State capture() {
-        if (!LOADED) return State.EMPTY;
-        Map<Field, Object> values = new HashMap<>();
-        List<FieldValue> result = new ArrayList<>();
-        for (String className : PIPELINE_CLASSES) {
-            Class<?> type = load(className);
-            if (type == null) continue;
-            collectStatic(type, values, result);
-        }
-        // A pipeline manager usually stores the active pipeline in a static field.  Include one
-        // level of its mutable state so captured rendering state and target version counters do
-        // not leak even when those fields are not static themselves.
-        for (FieldValue value : List.copyOf(result)) {
-            if (value.value() == null || !isPipelineObject(value.value().getClass())) continue;
-            collectInstance(value.value(), values, result);
-        }
-        return result.isEmpty() ? State.EMPTY : new State(result);
+    public static boolean isShadowPass() {
+        return LOADED && runtime().isShadowPass();
     }
 
-    private static void collectStatic(Class<?> type, Map<Field, Object> seen, List<FieldValue> result) {
-        for (Field field : allFields(type)) {
-            int modifiers = field.getModifiers();
-            if (!Modifier.isStatic(modifiers) || Modifier.isFinal(modifiers) || !isStateField(field)) continue;
-            add(field, null, seen, result);
-        }
+    public static boolean shouldDeferSurfacePresentation() {
+        return LOADED && !isMirrorPass() && runtime().isShaderPackInUse() && !runtime().isShadowPass();
     }
 
-    private static void collectInstance(Object owner, Map<Field, Object> seen, List<FieldValue> result) {
-        for (Field field : allFields(owner.getClass())) {
-            int modifiers = field.getModifiers();
-            if (Modifier.isStatic(modifiers) || Modifier.isFinal(modifiers) || !isStateField(field)) continue;
-            add(field, owner, seen, result);
-        }
+    static void beginMirrorTransaction() {
+        TRANSACTION_DEPTH.set(TRANSACTION_DEPTH.get() + 1);
     }
 
-    private static void add(Field field, Object owner, Map<Field, Object> seen, List<FieldValue> result) {
-        if (seen.putIfAbsent(field, owner) != null) return;
+    static void endMirrorTransaction() {
+        int depth = TRANSACTION_DEPTH.get();
+        if (depth <= 1) TRANSACTION_DEPTH.remove();
+        else TRANSACTION_DEPTH.set(depth - 1);
+    }
+
+    public static void clearMirrorPipelines() {
+        if (LOADED && RUNTIME != null) runtime().clearMirrorPipelines();
+    }
+
+    public static State capture(LevelRenderer renderer) {
+        return LOADED ? new State(runtime().capture(renderer)) : State.disabled();
+    }
+
+    public static Object getLevelRendererPipeline(LevelRenderer renderer) {
+        return runtime().getLevelRendererPipeline(renderer);
+    }
+
+    public static void setLevelRendererPipeline(LevelRenderer renderer, Object pipeline) {
+        runtime().setLevelRendererPipeline(renderer, pipeline);
+    }
+
+    private static Runtime runtime() {
+        if (RUNTIME == null) throw new IllegalStateException("Oculus runtime is unavailable");
+        return RUNTIME;
+    }
+
+    private static Runtime loadRuntime() {
+        if (!LOADED) return null;
         try {
-            field.setAccessible(true);
-            result.add(new FieldValue(field, owner, field.get(owner)));
-        } catch (ReflectiveOperationException | RuntimeException ignored) {
-            // A changed Oculus access transformer must disable only this optional snapshot entry,
-            // never the mirror or the client.
+            Class<?> type = Class.forName("com.mirror.client.OculusCompatImpl", true,
+                    OculusCompat.class.getClassLoader());
+            return (Runtime) type.getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException | RuntimeException error) {
+            throw new IllegalStateException("Cannot load the Oculus runtime", error);
         }
     }
 
-    private static boolean isStateField(Field field) {
-        String name = field.getName().toLowerCase(java.util.Locale.ROOT);
-        return name.contains("pipeline") || name.contains("captur") || name.contains("shadow")
-                || name.contains("target") || name.contains("version") || name.contains("frame")
-                || name.contains("rendering") || name.contains("gametime") || name.contains("time");
+    interface Runtime {
+        void initialize();
+
+        void clearMirrorPipelines();
+
+        boolean isShaderPackInUse();
+
+        boolean isShadowPass();
+
+        Object getLevelRendererPipeline(LevelRenderer renderer);
+
+        void setLevelRendererPipeline(LevelRenderer renderer, Object pipeline);
+
+        Transaction capture(LevelRenderer renderer);
     }
 
-    private static boolean isPipelineObject(Class<?> type) {
-        String name = type.getName().toLowerCase(java.util.Locale.ROOT);
-        return name.contains("pipeline") || name.contains("renderingstate")
-                || name.contains("capturedstate") || name.contains("shadowrenderer");
-    }
+    interface Transaction {
+        void enterReflection();
 
-    private static List<Field> allFields(Class<?> type) {
-        List<Field> fields = new ArrayList<>();
-        for (Class<?> current = type; current != null && current != Object.class; current = current.getSuperclass()) {
-            for (Field field : current.getDeclaredFields()) fields.add(field);
-        }
-        return fields;
-    }
-
-    private static Class<?> load(String name) {
-        try {
-            return Class.forName(name, false, OculusCompat.class.getClassLoader());
-        } catch (ClassNotFoundException | LinkageError ignored) {
-            return null;
-        }
+        void close();
     }
 
     public static final class State implements AutoCloseable {
-        private static final State EMPTY = new State(List.of());
-        private final List<FieldValue> values;
-        private boolean restored;
+        private final Transaction transaction;
 
-        private State(List<FieldValue> values) {
-            this.values = List.copyOf(values);
+        private State(Transaction transaction) {
+            this.transaction = transaction;
+        }
+
+        private static State disabled() {
+            return new State(null);
         }
 
         public void enterReflection() {
-            if (this == EMPTY) return;
-            mirrorPass = true;
-            for (FieldValue value : values) {
-                if (value.field().getType() != boolean.class) continue;
-                String name = value.field().getName().toLowerCase(java.util.Locale.ROOT);
-                if (name.equals("active") || name.contains("renderingshadow")
-                        || name.contains("shadowpass") || name.contains("shadowrendering")) {
-                    try {
-                        value.field().set(value.owner(), false);
-                    } catch (ReflectiveOperationException | RuntimeException ignored) {
-                        // Optional state; the regular snapshot restore still runs.
-                    }
-                }
-            }
+            if (transaction != null) transaction.enterReflection();
         }
 
         @Override
         public void close() {
-            if (restored) return;
-            restored = true;
-            for (int i = values.size() - 1; i >= 0; i--) values.get(i).restore();
-            mirrorPass = false;
-        }
-    }
-
-    private record FieldValue(Field field, Object owner, Object value) {
-        private void restore() {
-            try {
-                field.set(owner, value);
-            } catch (ReflectiveOperationException | RuntimeException ignored) {
-                // Oculus is optional and its private state is version-specific.
-            }
+            if (transaction != null) transaction.close();
         }
     }
 }
