@@ -17,7 +17,6 @@ import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
-import org.joml.Matrix4f;
 
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.List;
@@ -31,11 +30,14 @@ public final class MirrorReflectionTexture implements AutoCloseable {
     private static final ResourceLocation OVERLAY =
             new ResourceLocation("mirror", "textures/block/mirror/overlay.png");
 
+    private final long viewId;
     private final ResourceLocation textureLocation;
     private final TextureTarget surfaceTarget;
     private final MirrorRenderTargetTexture surfaceTexture;
     private final MirrorLevelRendererHooks.TextureState cullingState =
             new MirrorLevelRendererHooks.TextureState();
+    private final MirrorProjectionStabilizer projectionStabilizer = new MirrorProjectionStabilizer();
+    private final MirrorViewHistory viewHistory = new MirrorViewHistory();
     private final int recursionDepth;
     private final List<UUID> parentChain;
     private int layoutPixelWidth;
@@ -45,7 +47,8 @@ public final class MirrorReflectionTexture implements AutoCloseable {
 
     public MirrorReflectionTexture(int width, int height, int layoutPixelWidth, int layoutPixelHeight,
                                    int recursionDepth, List<UUID> parentChain) {
-        textureLocation = new ResourceLocation("mirror", "reflection/" + NEXT_ID.getAndIncrement());
+        viewId = NEXT_ID.getAndIncrement();
+        textureLocation = new ResourceLocation("mirror", "reflection/" + viewId);
         surfaceTarget = new TextureTarget(width, height, false, false);
         surfaceTexture = new MirrorRenderTargetTexture(surfaceTarget);
         this.recursionDepth = recursionDepth;
@@ -65,6 +68,8 @@ public final class MirrorReflectionTexture implements AutoCloseable {
                 newLayoutPixelWidth, newLayoutPixelHeight)) return false;
         layoutPixelWidth = newLayoutPixelWidth;
         layoutPixelHeight = newLayoutPixelHeight;
+        projectionStabilizer.reset();
+        viewHistory.reset();
         return true;
     }
 
@@ -123,19 +128,35 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         float rightPlane = (float) bottomRight.subtract(reflectedEye).dot(right) * scale;
         float bottom = (float) bottomLeft.subtract(reflectedEye).dot(up) * scale;
         float top = (float) topLeft.subtract(reflectedEye).dot(up) * scale;
-        Matrix4f projection = new Matrix4f().frustum(left, rightPlane, bottom, top, near, 1000.0f);
+        MirrorProjection projection = new MirrorProjection(left, rightPlane, bottom, top, near);
 
         MirrorCapturePool.CaptureSlot capture = MirrorCapturePool.acquire(
                 recursionDepth, surfaceTarget.width, surfaceTarget.height);
-        MirrorLevelRenderer.render(level, mirror, groupReflection, capture.target(), partialTick,
-                projection, facing.toYRot(), 0.0f, recursionDepth, parentChain, parentPath, cullingState);
-        compose(mirror, capture.target());
+        float captureGuardBand = OculusCompat.isShaderPackInUse()
+                ? MirrorProjectionStabilizer.SHADER_GUARD_BAND
+                : MirrorProjectionStabilizer.VANILLA_GUARD_BAND;
+        MirrorProjection.ViewportProjection captureProjection = projectionStabilizer.fit(
+                projection, capture.target().width, capture.target().height, captureGuardBand);
+        long renderStart = System.nanoTime();
+        try {
+            MirrorLevelRenderer.render(level, mirror, groupReflection, capture.target(), partialTick,
+                    captureProjection, facing.toYRot(), 0.0f, recursionDepth, parentChain, parentPath,
+                    cullingState, viewId, viewHistory);
+        } catch (MirrorPipelineUnavailableException unavailable) {
+            // A shader pack that Oculus cannot compile for a secondary pipeline must not take the
+            // whole client down. Build-budget deferrals use the same path and retry on the next request.
+            return;
+        } finally {
+            MirrorDiagnostics.recordReflectionPass(System.nanoTime() - renderStart);
+        }
+        compose(mirror, capture.target(), captureProjection.crop());
         surfaceTexture.refreshId();
         rendered = true;
         if (firstRenderNanos < 0) firstRenderNanos = System.nanoTime();
     }
 
-    private void compose(MirrorBlockEntity mirror, TextureTarget captureTarget) {
+    private void compose(MirrorBlockEntity mirror, TextureTarget captureTarget,
+                         MirrorProjection.UvRect reflectionCrop) {
         Minecraft minecraft = Minecraft.getInstance();
         ShaderInstance shader = MirrorClient.MIRROR_COMPOSITE_SHADER;
         if (shader == null) {
@@ -145,9 +166,13 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         AbstractTexture overlay = minecraft.getTextureManager().getTexture(OVERLAY);
         com.mojang.blaze3d.pipeline.RenderTarget mainTarget = minecraft.getMainRenderTarget();
         boolean applied = false;
+        MirrorRenderState.ScissorState outerScissor = MirrorRenderState.captureScissorState();
         surfaceTarget.bindWrite(true);
         try {
             RenderSystem.viewport(0, 0, surfaceTarget.width, surfaceTarget.height);
+            // Composition must cover the complete mirror surface even when the shader pipeline
+            // that just finished left a partial scissor rectangle active.
+            RenderSystem.disableScissor();
             RenderSystem.clear(16384, true);
             shader.setSampler("Sampler0", captureTarget);
             shader.setSampler("Sampler1", underlay);
@@ -159,6 +184,9 @@ public final class MirrorReflectionTexture implements AutoCloseable {
             shader.safeGetUniform("Tiles").set((float) mirror.getConnectedWidth(),
                     (float) mirror.getConnectedHeight());
             shader.safeGetUniform("Fade").set(fade());
+            shader.safeGetUniform("ReflectionUvRect").set(
+                    reflectionCrop.minU(), reflectionCrop.minV(),
+                    reflectionCrop.maxU(), reflectionCrop.maxV());
             shader.apply();
             applied = true;
             RenderSystem.disableDepthTest();
@@ -182,6 +210,7 @@ public final class MirrorReflectionTexture implements AutoCloseable {
             // dozens of synchronous texture-state queries per visible mirror.
             mainTarget.bindWrite(true);
             RenderSystem.viewport(0, 0, mainTarget.width, mainTarget.height);
+            outerScissor.restore();
             RenderSystem.colorMask(true, true, true, true);
             RenderSystem.depthMask(true);
             RenderSystem.enableDepthTest();
@@ -201,8 +230,11 @@ public final class MirrorReflectionTexture implements AutoCloseable {
 
     @Override
     public void close() {
+        OculusCompat.releaseMirrorView(viewId);
         Minecraft.getInstance().getTextureManager().release(textureLocation);
         cullingState.clear();
+        projectionStabilizer.reset();
+        viewHistory.reset();
         surfaceTarget.destroyBuffers();
     }
 

@@ -17,8 +17,12 @@ import java.util.UUID;
 
 /** Owns the render-target cache and defers all off-screen passes until the next outer world frame. */
 public final class MirrorTextureManager {
+    private static final int STALE_VIEW_GRACE_FRAMES = 600;
+
     private static final Map<MirrorTextureKey, MirrorReflectionTexture> TEXTURES = new HashMap<>();
     private static final Map<MirrorTextureKey, Pending> PENDING = new HashMap<>();
+    private static final Map<MirrorTextureKey, Long> LAST_USED_FRAME = new HashMap<>();
+    private static long frameIndex;
 
     private MirrorTextureManager() {
     }
@@ -28,6 +32,7 @@ public final class MirrorTextureManager {
         MirrorTextureKey key = directKey(mirror);
         MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
+        markUsed(key);
         PENDING.put(key, new Pending(key, mirror, List.of()));
         return texture.hasRendered() ? texture : null;
     }
@@ -37,6 +42,7 @@ public final class MirrorTextureManager {
         MirrorTextureKey key = directKey(mirror);
         MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
+        markUsed(key);
         if (!texture.hasRendered()) {
             PENDING.put(key, new Pending(key, mirror, List.of()));
         }
@@ -57,16 +63,22 @@ public final class MirrorTextureManager {
                 dimensions[0], dimensions[1]);
         MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
+        markUsed(key);
         PENDING.put(key, new Pending(key, mirror, MirrorLevelRenderer.getChildReflectionPath()));
         return texture.hasRendered() ? texture : null;
     }
 
     /**
-     * Consumes requests from the previous outer frame with the current frame's camera and tick delta.
-     * This is invoked from LevelRenderer immediately before its normal framebuffer clear, after Oculus
-     * has established the current frame's temporal uniforms but before the outer shader pipeline begins.
+     * Consumes requests collected by the completed outer world frame using that frame's camera and
+     * tick delta. GameRenderer invokes this only after its outer renderLevel call has returned, so
+     * reflected LevelRenderer passes are sequential off-screen renders rather than nested world-render
+     * re-entry. Requests produced by those captures remain queued for the following outer frame.
      */
     public static void processPending(Camera camera, float partialTick) {
+        frameIndex++;
+        OculusCompat.beginMirrorFrame();
+        MirrorDiagnostics.beginOuterFrame(PENDING.size());
+        evictStaleViews();
         if (PENDING.isEmpty()) return;
         Minecraft minecraft = Minecraft.getInstance();
         if (!(minecraft.level instanceof ClientLevel) || camera == null) {
@@ -103,10 +115,13 @@ public final class MirrorTextureManager {
     }
 
     public static void clear() {
-        OculusCompat.clearMirrorPipelines();
+        // Mirror textures/capture targets are view-owned. Oculus mirror pipelines are deliberately
+        // not destroyed here; PipelineManager.destroyPipeline is their single generation owner.
         PENDING.clear();
+        LAST_USED_FRAME.clear();
         TEXTURES.values().forEach(MirrorReflectionTexture::close);
         TEXTURES.clear();
+        frameIndex = 0L;
         MirrorCapturePool.clear();
         MirrorLevelRenderer.clearContext();
     }
@@ -153,6 +168,7 @@ public final class MirrorTextureManager {
             MirrorReflectionTexture oldTexture = entry.getValue();
             entries.remove();
             PENDING.remove(oldKey);
+            LAST_USED_FRAME.remove(oldKey);
             if (oldTexture.reuseForChangedLayout(key.width(), key.height(),
                     mirror.getScreenPixelWidth(), mirror.getScreenPixelHeight())) {
                 reusable = oldTexture;
@@ -168,6 +184,36 @@ public final class MirrorTextureManager {
         return TEXTURES.computeIfAbsent(key, ignored -> new MirrorReflectionTexture(
                 key.width(), key.height(), mirror.getScreenPixelWidth(), mirror.getScreenPixelHeight(),
                 key.depth(), key.parentChain()));
+    }
+
+    private static void markUsed(MirrorTextureKey key) {
+        LAST_USED_FRAME.put(key, frameIndex);
+    }
+
+    private static void evictStaleViews() {
+        if (TEXTURES.isEmpty()) return;
+        boolean evicted = false;
+        java.util.Iterator<Map.Entry<MirrorTextureKey, MirrorReflectionTexture>> iterator =
+                TEXTURES.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<MirrorTextureKey, MirrorReflectionTexture> entry = iterator.next();
+            MirrorTextureKey key = entry.getKey();
+            if (PENDING.containsKey(key)) continue;
+            long lastUsed = LAST_USED_FRAME.getOrDefault(key, frameIndex);
+            if (frameIndex - lastUsed <= STALE_VIEW_GRACE_FRAMES) continue;
+
+            iterator.remove();
+            LAST_USED_FRAME.remove(key);
+            entry.getValue().close();
+            evicted = true;
+        }
+
+        // Surface views are transient, but a compiled Oculus pipeline is shader-generation owned.
+        // Releasing the lightweight capture targets here is safe; warmed shader/terrain programs
+        // remain available when a mirror using the same slot becomes visible again.
+        if (evicted && TEXTURES.isEmpty() && PENDING.isEmpty()) {
+            MirrorCapturePool.clear();
+        }
     }
 
     private record Pending(MirrorTextureKey key, MirrorBlockEntity mirror,

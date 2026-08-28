@@ -1,16 +1,31 @@
 # Mirror
 
-Standalone Minecraft 1.20.1 Forge mirror mod. The technical mod ID is `mirror`
-and the display name is `Mirror`.
+Mirror is a functional Minecraft 1.20.1 Forge mod that forked from Vista.
+Add a placeable mirror with real-time reflection mechanisms.
 
-The current implementation contains the first playable layer plus direct reflection
-MVP: the mirror block, near/far placement, rectangular connections, persistent
-master dimensions, crafting, Crystalline material, Elder Guardian loot, an
-off-screen reflection target, mirror material shader, first-frame fade, distance
-LOD, SHARED texture reuse, and chain-isolated RECURSIVE rendering with hard depth
-and resolution limits. Server-side Enderman observation is enabled by default
-and can be disabled independently with `enderman.enableObservation` in
-`config/mirror-common.toml`.
+Mirror是模组Vista中的“镜子”向1.20.1Forge的功能移植模组。
+添加了镜子方块及其实时渲染机制。
+
+## Description
+
+该模组目前已经移植了Vista模组中的镜子主要功能，
+包括镜面反射、连接镜像、远景LOD、Recrusive、Oculus兼容等。
+合成配方需要使用远古守卫者掉落的Crystalline。
+此外，还可以开启末影人的机制联动。
+配置文件目录：`config/mirror-common.toml`。
+
+## Authors and source
+
+Original authors: MehVahdJukaar, Plantkillable
+    <https://github.com/MehVahdJukaar/cameramod>
+Projected by: MinazukiSora, gpt 5.6 sol high.
+    <https://github.com/YLSora/Mirror>
+
+## Requirements
+
+- Minecraft 1.20.1
+- Forge >= 47.2.0
+- Oculus >= 1.8.0 for shader compatibility
 
 Build with Java 17:
 
@@ -22,10 +37,6 @@ gradlew runServer
 
 The observation feature checks the player's ray against the mirror surface,
 reflects that ray, and applies vanilla Enderman freeze/anger behavior to nearby
-Endermen. It runs only on the server and adds no Moonlight runtime dependency.
-
-The original Vista sources remain outside the Gradle source set for reference;
-the published JAR is built only from `src/main` and does not provide any `vista`
-ID or migration path.
+Endermen.
 
 See [NOTICE.md](NOTICE.md) and [LICENSE.md](LICENSE.md) before redistributing.

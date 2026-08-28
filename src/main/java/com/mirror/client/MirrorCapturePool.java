@@ -7,16 +7,20 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Owns the stable render target used by each mirror pipeline slot.
+ * Owns stable render targets for mirror pipeline slots.
  *
- * <p>Mirror passes are serialized on the render thread, so all mirrors in the same recursion and
- * resolution slot can render through one target. Their finished images are copied immediately to
- * their individual surface targets.</p>
+ * <p>Mirror shader captures use one square power-of-two target per recursion/resolution slot.
+ * A square target keeps Oculus' viewport aspect and the centered capture projection identical,
+ * while {@link MirrorProjection#fitViewport(int, int)} adds only the overscan required to contain
+ * the physical mirror aperture and returns the exact UV crop used during composition. Keeping the
+ * slot one-dimensional also prevents arbitrary mirror aspect ratios from multiplying complete
+ * Oculus pipelines.</p>
  */
 public final class MirrorCapturePool {
-    private static final int MIN_BUCKET_SIZE = 16;
-    private static final int MIN_SHADER_BUCKET_SIZE = 256;
+    static final int MIN_BUCKET_SIZE = 16;
+    static final int MIN_SHADER_LONG_EDGE = 256;
     private static final Map<MirrorPassContext.PipelineSlot, CaptureSlot> SLOTS = new HashMap<>();
+    private static int maximumTextureSize;
 
     private MirrorCapturePool() {
     }
@@ -25,29 +29,55 @@ public final class MirrorCapturePool {
         if (requestedWidth <= 0 || requestedHeight <= 0) {
             throw new IllegalArgumentException("mirror capture dimensions must be positive");
         }
-        int minimum = OculusCompat.isShaderPackInUse() ? MIN_SHADER_BUCKET_SIZE : MIN_BUCKET_SIZE;
-        int side = bucketSide(requestedWidth, requestedHeight,
-                GL11C.glGetInteger(GL11C.GL_MAX_TEXTURE_SIZE), minimum);
-        MirrorPassContext.PipelineSlot key = new MirrorPassContext.PipelineSlot(
-                recursionDepth, new MirrorPassContext.ResolutionBucket(side, side));
+        boolean shaderCapture = OculusCompat.isShaderPackInUse();
+        int minimumLongEdge = shaderCapture ? MIN_SHADER_LONG_EDGE : MIN_BUCKET_SIZE;
+        int captureWidth = compensatedRequestSize(requestedWidth, shaderCapture);
+        int captureHeight = compensatedRequestSize(requestedHeight, shaderCapture);
+        MirrorPassContext.ResolutionBucket bucket = bucketSize(
+                captureWidth, captureHeight, maximumTextureSize(), minimumLongEdge);
+        MirrorPassContext.PipelineSlot key = new MirrorPassContext.PipelineSlot(recursionDepth, bucket);
         return SLOTS.computeIfAbsent(key, ignored -> new CaptureSlot(key,
-                new TextureTarget(side, side, true, false)));
+                new TextureTarget(bucket.widthBucket(), bucket.heightBucket(), true, false)));
     }
 
-    static int bucketSide(int requestedWidth, int requestedHeight, int maximumTextureSize) {
-        return bucketSide(requestedWidth, requestedHeight, maximumTextureSize, MIN_BUCKET_SIZE);
+    static int compensatedRequestSize(int requestedSize, boolean shaderCapture) {
+        if (requestedSize <= 0) {
+            throw new IllegalArgumentException("mirror capture dimension must be positive");
+        }
+        if (!shaderCapture) return requestedSize;
+        double scaled = Math.ceil(requestedSize * (double) MirrorProjectionStabilizer.shaderSamplingCompensation());
+        return scaled >= Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) scaled;
     }
 
-    private static int bucketSide(int requestedWidth, int requestedHeight, int maximumTextureSize,
-                                  int minimumBucketSize) {
-        int minimum = Math.max(MIN_BUCKET_SIZE, minimumBucketSize);
-        int required = Math.max(minimum, Math.max(requestedWidth, requestedHeight));
+    static MirrorPassContext.ResolutionBucket bucketSize(int requestedWidth, int requestedHeight,
+                                                          int maximumTextureSize) {
+        return bucketSize(requestedWidth, requestedHeight, maximumTextureSize, MIN_BUCKET_SIZE);
+    }
+
+    static MirrorPassContext.ResolutionBucket bucketSize(int requestedWidth, int requestedHeight,
+                                                          int maximumTextureSize,
+                                                          int minimumLongEdge) {
+        if (requestedWidth <= 0 || requestedHeight <= 0) {
+            throw new IllegalArgumentException("mirror capture dimensions must be positive");
+        }
         int maximum = Math.max(MIN_BUCKET_SIZE, maximumTextureSize);
-        if (required >= maximum) return maximum;
+        int requiredLongEdge = Math.max(requestedWidth, requestedHeight);
+        int required = Math.max(MIN_BUCKET_SIZE, Math.max(minimumLongEdge, requiredLongEdge));
+        int side = Math.min(maximum, nextPowerOfTwo(required));
+        return new MirrorPassContext.ResolutionBucket(side, side);
+    }
 
-        int bucket = Integer.highestOneBit(required - 1) << 1;
-        if (bucket <= 0) bucket = maximum;
-        return Math.min(bucket, maximum);
+    private static int maximumTextureSize() {
+        if (maximumTextureSize <= 0) {
+            maximumTextureSize = GL11C.glGetInteger(GL11C.GL_MAX_TEXTURE_SIZE);
+        }
+        return maximumTextureSize;
+    }
+
+    private static int nextPowerOfTwo(int value) {
+        if (value <= 1) return 1;
+        if (value >= (1 << 30)) return Integer.MAX_VALUE;
+        return Integer.highestOneBit(value - 1) << 1;
     }
 
     public static void clear() {

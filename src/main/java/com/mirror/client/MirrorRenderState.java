@@ -37,6 +37,7 @@ final class MirrorRenderState {
     private final List<PoseData> modelViewStack;
     private final Matrix4f textureMatrix;
     private final int[] viewport;
+    private final ScissorState scissorState;
     private final int vertexArray;
     private final int arrayBuffer;
     private final int elementArrayBuffer;
@@ -100,6 +101,7 @@ final class MirrorRenderState {
         GL11C.glGetIntegerv(GL11C.GL_VIEWPORT, viewportBuffer);
         viewport = new int[]{viewportBuffer.get(0), viewportBuffer.get(1),
                 viewportBuffer.get(2), viewportBuffer.get(3)};
+        scissorState = captureScissorState();
         vertexArray = GL30C.glGetInteger(GL30C.GL_VERTEX_ARRAY_BINDING);
         arrayBuffer = GL15C.glGetInteger(GL15C.GL_ARRAY_BUFFER_BINDING);
         elementArrayBuffer = GL15C.glGetInteger(GL15C.GL_ELEMENT_ARRAY_BUFFER_BINDING);
@@ -146,6 +148,7 @@ final class MirrorRenderState {
 
     void restore() {
         RenderSystem.viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        scissorState.restore();
         GlStateManager._glBindVertexArray(vertexArray);
         GlStateManager._glBindBuffer(GL15C.GL_ARRAY_BUFFER, arrayBuffer);
         GlStateManager._glBindBuffer(GL15C.GL_ELEMENT_ARRAY_BUFFER, elementArrayBuffer);
@@ -202,6 +205,26 @@ final class MirrorRenderState {
         setState(GL11C.GL_CULL_FACE, cull, RenderSystem::enableCull, RenderSystem::disableCull);
         setState(GL11C.GL_POLYGON_OFFSET_FILL, polygonOffset,
                 RenderSystem::enablePolygonOffset, RenderSystem::disablePolygonOffset);
+    }
+
+
+    static ScissorState captureScissorState() {
+        IntBuffer scissorBuffer = BufferUtils.createIntBuffer(4);
+        GL11C.glGetIntegerv(GL11C.GL_SCISSOR_BOX, scissorBuffer);
+        return new ScissorState(
+                GL11C.glIsEnabled(GL11C.GL_SCISSOR_TEST),
+                scissorBuffer.get(0), scissorBuffer.get(1),
+                scissorBuffer.get(2), scissorBuffer.get(3));
+    }
+
+    record ScissorState(boolean enabled, int x, int y, int width, int height) {
+        void restore() {
+            if (enabled) {
+                RenderSystem.enableScissor(x, y, width, height);
+            } else {
+                RenderSystem.disableScissor();
+            }
+        }
     }
 
     private static boolean[] captureColorMask() {

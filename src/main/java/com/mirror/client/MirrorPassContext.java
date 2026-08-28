@@ -1,6 +1,8 @@
 package com.mirror.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import net.minecraft.world.phys.Vec3;
+import org.joml.Matrix4f;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -8,34 +10,63 @@ import java.util.Deque;
 /**
  * Render-thread context for one mirror pass.
  *
- * <p>The context is deliberately independent from a mirror UUID.  A pipeline is a resource for
- * a dimension, recursion level and resolution slot; using the mirror identity here would create
- * one shader pipeline per block and would make recursive rendering impossible to warm up
- * deterministically.</p>
+ * <p>The pipeline slot describes the stable Oculus shader-resource domain, while {@code viewId}
+ * identifies one persistent reflected camera. View-specific matrices/camera history remain keyed by
+ * {@code viewId}; heavyweight Oculus pipelines are shared by all views in the same slot.</p>
  */
 public final class MirrorPassContext implements AutoCloseable {
     private static final ThreadLocal<Deque<MirrorPassContext>> STACK =
             ThreadLocal.withInitial(ArrayDeque::new);
 
+    private final long viewId;
     private final int recursionDepth;
     private final ResolutionBucket resolutionBucket;
     private final PipelineSlot pipelineSlot;
     private final RenderTarget captureTarget;
+    private final float nearPlane;
+    private final float renderDistance;
+    private final MirrorProjection.UvRect reflectionCrop;
+    private final Matrix4f previousModelView;
+    private final Matrix4f previousProjection;
+    private final Vec3 previousCameraPosition;
     private boolean closed;
 
-    private MirrorPassContext(int recursionDepth, RenderTarget captureTarget) {
+    private MirrorPassContext(long viewId, int recursionDepth, RenderTarget captureTarget,
+                              float nearPlane, float renderDistance,
+                              MirrorProjection.UvRect reflectionCrop,
+                              Matrix4f previousModelView, Matrix4f previousProjection,
+                              Vec3 previousCameraPosition) {
         if (recursionDepth < 0) throw new IllegalArgumentException("recursionDepth must be non-negative");
         if (captureTarget.width <= 0 || captureTarget.height <= 0) {
             throw new IllegalArgumentException("mirror capture target must have a positive size");
         }
+        if (!Float.isFinite(nearPlane) || nearPlane <= 0.0f) {
+            throw new IllegalArgumentException("mirror near plane must be positive and finite");
+        }
+        if (!Float.isFinite(renderDistance) || renderDistance <= 0.0f) {
+            throw new IllegalArgumentException("mirror render distance must be positive and finite");
+        }
+        this.viewId = viewId;
         this.recursionDepth = recursionDepth;
         this.resolutionBucket = new ResolutionBucket(captureTarget.width, captureTarget.height);
         this.pipelineSlot = new PipelineSlot(recursionDepth, resolutionBucket);
         this.captureTarget = captureTarget;
+        this.nearPlane = nearPlane;
+        this.renderDistance = renderDistance;
+        this.reflectionCrop = reflectionCrop == null ? MirrorProjection.UvRect.full() : reflectionCrop;
+        this.previousModelView = new Matrix4f(previousModelView);
+        this.previousProjection = new Matrix4f(previousProjection);
+        this.previousCameraPosition = previousCameraPosition;
     }
 
-    public static MirrorPassContext begin(int recursionDepth, RenderTarget captureTarget) {
-        MirrorPassContext context = new MirrorPassContext(recursionDepth, captureTarget);
+    public static MirrorPassContext begin(long viewId, int recursionDepth, RenderTarget captureTarget,
+                                          float nearPlane, float renderDistance,
+                                          MirrorProjection.UvRect reflectionCrop,
+                                          Matrix4f previousModelView, Matrix4f previousProjection,
+                                          Vec3 previousCameraPosition) {
+        MirrorPassContext context = new MirrorPassContext(
+                viewId, recursionDepth, captureTarget, nearPlane, renderDistance, reflectionCrop,
+                previousModelView, previousProjection, previousCameraPosition);
         STACK.get().push(context);
         return context;
     }
@@ -54,6 +85,12 @@ public final class MirrorPassContext implements AutoCloseable {
         return current().pipelineSlot;
     }
 
+
+    /** Stable identity of the persistent reflected camera and its per-view temporal history. */
+    public long viewId() {
+        return viewId;
+    }
+
     public int recursionDepth() {
         return recursionDepth;
     }
@@ -68,6 +105,33 @@ public final class MirrorPassContext implements AutoCloseable {
 
     public RenderTarget captureTarget() {
         return captureTarget;
+    }
+
+    public float nearPlane() {
+        return nearPlane;
+    }
+
+    /** Shader-pack far uniform, in blocks. The actual projection far plane is four times this. */
+    public float renderDistance() {
+        return renderDistance;
+    }
+
+    /** Physical mirror aperture within the centered capture target. */
+    public MirrorProjection.UvRect reflectionCrop() {
+        return reflectionCrop;
+    }
+
+
+    public Matrix4f previousModelView() {
+        return new Matrix4f(previousModelView);
+    }
+
+    public Matrix4f previousProjection() {
+        return new Matrix4f(previousProjection);
+    }
+
+    public Vec3 previousCameraPosition() {
+        return previousCameraPosition;
     }
 
     @Override

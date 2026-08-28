@@ -26,6 +26,10 @@ uniform vec2 Tiles;
 // fades in over a few hundred ms after the first valid frame.
 uniform float Fade;
 
+// Portion of the bucketed Oculus capture occupied by the physical mirror aperture. The
+// projection may contain overscan so its aspect matches the framebuffer without stretching.
+uniform vec4 ReflectionUvRect;
+
 in float vertexDistance;
 in vec4 vertexColor;
 in vec2 texCoord0;
@@ -121,7 +125,8 @@ void main() {
     // blur here compounds shader-pack post processing and recursive resolution decay, making
     // nested mirrors disproportionately soft. Preserve the material warp but sample the result
     // only once.
-    vec3 refl = texture(Sampler0, duv).rgb;
+    vec2 reflectionUv = mix(ReflectionUvRect.xy, ReflectionUvRect.zw, duv);
+    vec3 refl = texture(Sampler0, reflectionUv).rgb;
 
     // ---------- BASE ----------
     // Tile the base material one full copy per block, pixel-perfect with the framebuffer.

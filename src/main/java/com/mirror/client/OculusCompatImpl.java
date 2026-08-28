@@ -6,6 +6,7 @@ import net.irisshaders.iris.gl.blending.BlendModeStorage;
 import net.irisshaders.iris.gl.blending.DepthColorStorage;
 import net.irisshaders.iris.gl.program.ProgramSamplers;
 import net.irisshaders.iris.gl.program.ProgramUniforms;
+import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
 import net.irisshaders.iris.pipeline.PipelineManager;
 import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
 import net.irisshaders.iris.shadows.ShadowRenderer;
@@ -24,6 +25,7 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
     private static final String TERRAIN_OVERRIDE_CLASS =
             "net.irisshaders.iris.compat.sodium.impl.shader_overrides.IrisChunkProgramOverrides";
     private static final String TERRAIN_OVERRIDE_METHOD = "getProgramOverride";
+    private static final String TERRAIN_CREATE_METHOD = "createShaders";
 
     private static volatile Field levelRendererPipeline;
 
@@ -36,17 +38,31 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
     }
 
     @Override
-    public void clearMirrorPipelines() {
+    public void beginMirrorFrame() {
         PipelineManager manager = Iris.getPipelineManager();
         if (!(manager instanceof MirrorPipelineAccess access)) {
             throw new IllegalStateException("Mirror PipelineManager state access is unavailable");
         }
-        access.mirror$clearMirrorPipelines();
+        access.mirror$beginFrame();
+    }
+
+    @Override
+    public void releaseMirrorView(long viewId) {
+        PipelineManager manager = Iris.getPipelineManager();
+        if (!(manager instanceof MirrorPipelineAccess access)) {
+            throw new IllegalStateException("Mirror PipelineManager state access is unavailable");
+        }
+        access.mirror$releaseMirrorView(viewId);
     }
 
     @Override
     public boolean isShaderPackInUse() {
-        return IrisApi.getInstance().isShaderPackInUse();
+        if (!IrisApi.getInstance().isShaderPackInUse()) return false;
+        WorldRenderingPipeline current = Iris.getPipelineManager().getPipelineNullable();
+        // Oculus keeps the pack selected when pipeline creation fails, but replaces the active
+        // world pipeline with its vanilla fallback. Treat only a real IrisRenderingPipeline as
+        // shader-active so mirrors do not retry the same failed pack for every slot/view.
+        return current instanceof IrisRenderingPipeline;
     }
 
     @Override
@@ -128,7 +144,8 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
             if (!OculusTerrainProgramCacheAccess.class.isAssignableFrom(target)) {
                 throw new IllegalStateException("Oculus terrain program cache mixin was not applied");
             }
-            boolean found = false;
+            boolean overrideFound = false;
+            boolean createShadersFound = false;
             for (java.lang.reflect.Method method : target.getDeclaredMethods()) {
                 Class<?>[] parameters = method.getParameterTypes();
                 if (TERRAIN_OVERRIDE_METHOD.equals(method.getName())
@@ -139,11 +156,15 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
                         .equals(parameters[1].getName())
                         && "me.jellysquid.mods.sodium.client.gl.shader.GlProgram"
                         .equals(method.getReturnType().getName())) {
-                    found = true;
-                    break;
+                    overrideFound = true;
+                } else if (TERRAIN_CREATE_METHOD.equals(method.getName())
+                        && method.getReturnType() == void.class) {
+                    // The mixin deliberately does not capture target arguments. Keep the startup
+                    // check tied to the stable method/return boundary instead of assuming arity.
+                    createShadersFound = true;
                 }
             }
-            if (!found) {
+            if (!overrideFound || !createShadersFound) {
                 throw new IllegalStateException("Oculus terrain override method signature changed");
             }
         } catch (ClassNotFoundException error) {
@@ -217,7 +238,9 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
                 levelAccess.mirror$setPipeline(outerLevelPipeline);
                 pipelineAccess.mirror$setPipeline(outerManagerPipeline);
             } finally {
-                if (entered) OculusCompat.endMirrorTransaction();
+                if (entered) {
+                    OculusCompat.endMirrorTransaction();
+                }
             }
         }
     }

@@ -102,28 +102,50 @@ public final class MirrorLevelRenderer {
     public static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
                               RenderTarget target, float partialTick) {
         Direction facing = mirror.getBlockState().getValue(com.mirror.common.MirrorBlock.FACING);
-        render(level, mirror, reflection, target, partialTick, null, facing.toYRot(), 0.0f, 0, List.of());
+        render(level, mirror, reflection, target, partialTick, null, facing.toYRot(), 0.0f, 0, List.of(),
+                List.of(), new MirrorLevelRendererHooks.TextureState(), Long.MIN_VALUE, new MirrorViewHistory());
     }
 
     public static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
-                              RenderTarget target, float partialTick, Matrix4f customProjection,
+                              RenderTarget target, float partialTick, MirrorProjection.ViewportProjection customProjection,
                               float yaw, float pitch, int recursionDepth, List<UUID> parentChain) {
         render(level, mirror, reflection, target, partialTick, customProjection, yaw, pitch,
-                recursionDepth, parentChain, List.of(), new MirrorLevelRendererHooks.TextureState());
+                recursionDepth, parentChain, List.of(), new MirrorLevelRendererHooks.TextureState(),
+                Long.MIN_VALUE, new MirrorViewHistory());
     }
 
     static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
-                       RenderTarget target, float partialTick, Matrix4f customProjection,
+                       RenderTarget target, float partialTick, MirrorProjection.ViewportProjection customProjection,
                        float yaw, float pitch, int recursionDepth, List<UUID> parentChain,
                        List<ReflectionPlane> parentReflectionPath,
-                       MirrorLevelRendererHooks.TextureState textureState) {
+                       MirrorLevelRendererHooks.TextureState textureState,
+                       long viewId, MirrorViewHistory viewHistory) {
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.level != level || minecraft.player == null) return;
 
         RenderTarget mainTarget = minecraft.getMainRenderTarget();
         GameRenderer gameRenderer = minecraft.gameRenderer;
         MinecraftAccess minecraftAccess = minecraft instanceof MinecraftAccess access ? access : null;
-        try (MirrorPassContext pass = MirrorPassContext.begin(recursionDepth, target)) {
+        float oldRenderDistance = gameRenderer.getRenderDistance();
+        double distanceScale = Math.pow(MirrorConfig.CLIENT.recursiveRenderDistanceDecay.get(), recursionDepth);
+        float mirrorRenderDistance = Math.max(1.0f, (float) (oldRenderDistance * distanceScale));
+        float nearPlane = customProjection == null ? 0.05f : customProjection.nearPlane();
+        float farPlane = Math.max(nearPlane + 1.0f, mirrorRenderDistance * 4.0f);
+        MirrorProjection.UvRect reflectionCrop = customProjection == null
+                ? MirrorProjection.UvRect.full() : customProjection.crop();
+        float fov = minecraft.options.fov().get().floatValue();
+        Matrix4f projection = customProjection == null
+                ? new Matrix4f().perspective((float) Math.toRadians(fov),
+                (float) target.width / (float) target.height, nearPlane, farPlane)
+                : customProjection.matrix(farPlane);
+        Matrix4f viewMatrix = new Matrix4f()
+                .rotationX((float) Math.toRadians(pitch))
+                .rotateY((float) Math.toRadians(yaw + 180.0f));
+        Vec3 reflectedEye = reflection.reflectedEye();
+        MirrorViewHistory.Snapshot previous = viewHistory.previousOr(viewMatrix, projection, reflectedEye);
+        try (MirrorPassContext pass = MirrorPassContext.begin(
+                viewId, recursionDepth, target, nearPlane, mirrorRenderDistance, reflectionCrop,
+                previous.modelView(), previous.projection(), previous.cameraPosition())) {
             MirrorRenderState renderState = MirrorRenderState.capture();
             Camera camera = new MirrorCamera();
             Direction mirrorFacing = mirror.getBlockState().getValue(com.mirror.common.MirrorBlock.FACING);
@@ -140,35 +162,37 @@ public final class MirrorLevelRenderer {
             OculusCompat.State oculusState = OculusCompat.capture(minecraft.levelRenderer);
             Camera previousMainCamera = rendererAccess == null ? gameRenderer.getMainCamera()
                     : rendererAccess.mirror$getMainCamera();
-            ((MirrorCamera) camera).configure(level, reflection.reflectedEye(),
-                    yaw, pitch, partialTick);
+            ((MirrorCamera) camera).configure(level, reflectedEye, yaw, pitch, partialTick);
 
-            float oldRenderDistance = gameRenderer.getRenderDistance();
             MirrorLevelRendererHooks.State cullState = null;
             boolean framePushed = false;
+            boolean renderedFrame = false;
+            DeferredMirrorSurfaceRenderer.PassScope deferredSurfaces = null;
             try {
                 oculusState.enterReflection();
+                // Nested mirror textures are already fully composed images. Queue their physical
+                // surfaces until this mirror pipeline reaches finalizeLevelRendering, otherwise an
+                // entity/emissive G-buffer pass shades and tone-maps the child reflection twice.
+                deferredSurfaces = DeferredMirrorSurfaceRenderer.beginMirrorPass();
                 // Keep the normal Fabulous and post-processing paths intact. The active Iris
                 // pipeline is isolated by the cache key and must observe the capture target as
                 // an ordinary main target for this nested renderLevel call.
                 if (minecraftAccess != null) minecraftAccess.mirror$setMainRenderTarget(target);
                 target.bindWrite(true);
                 RenderSystem.viewport(0, 0, target.width, target.height);
+                // A shader pipeline may leave a partial scissor rectangle active. Reusing that
+                // rectangle on a smaller mirror target spatially truncates the reflection. World
+                // rendering owns the full capture target; restore the outer scissor with renderState.
+                RenderSystem.disableScissor();
                 RenderSystem.clear(16640, true);
 
-                float fov = minecraft.options.fov().get().floatValue();
-                Matrix4f projection = customProjection == null
-                        ? new Matrix4f().perspective((float) Math.toRadians(fov),
-                        (float) target.width / (float) target.height, 0.05f, 1000.0f)
-                        : new Matrix4f(customProjection);
                 RenderSystem.setProjectionMatrix(projection, VertexSorting.DISTANCE_TO_ORIGIN);
 
-                double distanceScale = Math.pow(MirrorConfig.CLIENT.recursiveRenderDistanceDecay.get(), recursionDepth);
                 if (rendererAccess != null) {
                     // The mirror visibility distance controls whether the block entity is
                     // submitted; it is not the distance of the reflected world pass. Reuse the
                     // player's distance for depth zero and attenuate only nested passes.
-                    rendererAccess.mirror$setRenderDistance((float) (oldRenderDistance * distanceScale));
+                    rendererAccess.mirror$setRenderDistance(mirrorRenderDistance);
                 }
 
                 if (rendererAccess != null) rendererAccess.mirror$setMainCamera(camera);
@@ -192,9 +216,6 @@ public final class MirrorLevelRenderer {
                         .add(normal);
                 cullState = MirrorLevelRendererHooks.prepare(minecraft.levelRenderer, camera, bfsStart,
                         textureState);
-                Matrix4f viewMatrix = new Matrix4f()
-                        .rotationX((float) Math.toRadians(camera.getXRot()))
-                        .rotateY((float) Math.toRadians(camera.getYRot() + 180.0f));
                 Matrix3f viewNormal = new Matrix3f(viewMatrix);
                 PoseStack poseStack = new PoseStack();
                 poseStack.last().pose().set(viewMatrix);
@@ -203,8 +224,10 @@ public final class MirrorLevelRenderer {
                 minecraft.levelRenderer.prepareCullFrustum(poseStack, camera.getPosition(), projection);
                 minecraft.levelRenderer.renderLevel(poseStack, partialTick, System.nanoTime(), false,
                         camera, gameRenderer, gameRenderer.lightTexture(), projection);
+                renderedFrame = true;
             } finally {
                 if (cullState != null) cullState.close();
+                if (deferredSurfaces != null) deferredSurfaces.close();
                 if (framePushed) {
                     RenderFrame popped = RENDER_STACK.pop();
                     if (popped != frame) {
@@ -225,6 +248,9 @@ public final class MirrorLevelRenderer {
                 entityRenderDispatcher.prepare(level, previousMainCamera, minecraft.crosshairPickEntity);
                 mainTarget.bindWrite(true);
                 RenderSystem.viewport(0, 0, mainTarget.width, mainTarget.height);
+            }
+            if (renderedFrame) {
+                viewHistory.commit(viewMatrix, projection, reflectedEye);
             }
         }
     }

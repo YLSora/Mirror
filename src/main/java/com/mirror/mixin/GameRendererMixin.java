@@ -1,6 +1,8 @@
 package com.mirror.mixin;
 
 import com.mirror.client.MirrorLevelRenderer;
+import com.mirror.client.MirrorTextureManager;
+import com.mirror.client.OculusCompat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
@@ -44,6 +46,23 @@ abstract class GameRendererMixin {
     private void mirror$captureWalkBob(float partialTick, long finishTimeNano,
                                        PoseStack renderPose, CallbackInfo callback) {
         mirror$captureBobOffset();
+    }
+
+    /**
+     * Consume last frame's mirror requests only after the outer GameRenderer world pass has
+     * completely returned. MirrorLevelRenderer calls LevelRenderer directly, so this keeps every
+     * reflected world render out of the outer LevelRenderer.renderLevel call stack while still
+     * rendering the full entity pipeline (including PlayerRenderer/YSM) into the mirror target.
+     *
+     * The resulting mirror texture is intentionally one outer frame behind the request that
+     * produced it, which was already true for the previous pending-request design.
+     */
+    @Inject(method = "renderLevel", at = @At("TAIL"))
+    private void mirror$renderPendingReflections(float partialTick, long finishTimeNano,
+                                                  PoseStack renderPose, CallbackInfo callback) {
+        if (MirrorLevelRenderer.isRenderingReflection() || OculusCompat.isShadowPass()) return;
+        Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
+        MirrorTextureManager.processPending(camera, partialTick);
     }
 
     @Unique

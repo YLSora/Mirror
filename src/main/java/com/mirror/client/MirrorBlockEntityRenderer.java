@@ -8,12 +8,10 @@ import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
-import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.Direction;
 import net.minecraft.world.phys.Vec3;
 
@@ -95,24 +93,22 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
         }
 
         PoseStack.Pose pose = poseStack.last();
-        // A child mirror rendered inside an active Oculus world pass must use one of Oculus'
-        // recognized entity RenderTypes and the matching NEW_ENTITY vertex layout. Feeding the
-        // custom POSITION_COLOR_TEX surface through the block-entity buffer bypasses Oculus'
-        // entity/gbuffer routing and leaves shader-pack fallback attributes undefined, which can
-        // appear as a red/green gradient in the parent reflection. The outer completed mirror is
-        // still presented with MirrorRenderTypes.mirrorSurface(), so it remains unlit and no-cull.
-        if (MirrorLevelRenderer.isRenderingReflection() && OculusCompat.isShaderPackInUse()) {
-            VertexConsumer vertices = buffer.getBuffer(RenderType.entityTranslucentEmissive(texture));
-            entityVertex(vertices, pose, left, bottom, 0, 0);
-            entityVertex(vertices, pose, right, bottom, 1, 0);
-            entityVertex(vertices, pose, right, top, 1, 1);
-            entityVertex(vertices, pose, left, top, 0, 1);
-        } else {
-            VertexConsumer vertices = buffer.getBuffer(MirrorRenderTypes.mirrorSurface(texture));
-            surfaceVertex(vertices, pose, left, bottom, 0, 0);
-            surfaceVertex(vertices, pose, right, bottom, 1, 0);
-            surfaceVertex(vertices, pose, right, top, 1, 1);
-            surfaceVertex(vertices, pose, left, top, 0, 1);
+        RenderType renderType = MirrorRenderTypes.mirrorSurface(texture);
+        VertexConsumer vertices = buffer.getBuffer(renderType);
+        surfaceVertex(vertices, pose, left, bottom, 0, 0);
+        surfaceVertex(vertices, pose, right, bottom, 1, 0);
+        surfaceVertex(vertices, pose, right, top, 1, 1);
+        surfaceVertex(vertices, pose, left, top, 0, 1);
+
+        // mirror_surface is a texture-specific custom RenderType, so it is not one of
+        // RenderBuffers' fixed types.  Do not leave its vertices pending in the caller's global
+        // BufferSource: whether they are eventually flushed would then depend on a later hand/item
+        // renderer (or on Flashier's albedo pass calling endBatch()).  That made an unlit
+        // flashlight/empty hand/translucent held item capable of suppressing the mirror, while an
+        // active flashlight accidentally made it reappear.  Close only our own batch here; this
+        // does not flush or reorder any other mod's buffered render types.
+        if (buffer instanceof MultiBufferSource.BufferSource source) {
+            source.endBatch(renderType);
         }
         poseStack.popPose();
     }
@@ -125,14 +121,4 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
                 .endVertex();
     }
 
-    private static void entityVertex(VertexConsumer vertices, PoseStack.Pose pose, float x, float y,
-                                     float u, float v) {
-        vertices.vertex(pose.pose(), x, y, 0.0f)
-                .color(255, 255, 255, 255)
-                .uv(u, v)
-                .overlayCoords(OverlayTexture.NO_OVERLAY)
-                .uv2(LightTexture.FULL_BRIGHT)
-                .normal(pose.normal(), 0.0f, 0.0f, 1.0f)
-                .endVertex();
-    }
 }

@@ -33,7 +33,7 @@ public final class OculusCompat {
     }
 
     public static boolean shouldDeferSurfacePresentation() {
-        return LOADED && !isMirrorPass() && runtime().isShaderPackInUse() && !runtime().isShadowPass();
+        return LOADED && runtime().isShaderPackInUse() && !runtime().isShadowPass();
     }
 
     static void beginMirrorTransaction() {
@@ -46,8 +46,14 @@ public final class OculusCompat {
         else TRANSACTION_DEPTH.set(depth - 1);
     }
 
-    public static void clearMirrorPipelines() {
-        if (LOADED && RUNTIME != null) runtime().clearMirrorPipelines();
+    /** Starts one real outer render frame for demand-driven mirror pipeline construction. */
+    public static void beginMirrorFrame() {
+        if (LOADED && RUNTIME != null) runtime().beginMirrorFrame();
+    }
+
+    /** Releases Oculus state scoped to one persistent reflected-camera view. */
+    public static void releaseMirrorView(long viewId) {
+        if (LOADED && RUNTIME != null) runtime().releaseMirrorView(viewId);
     }
 
     public static State capture(LevelRenderer renderer) {
@@ -81,7 +87,9 @@ public final class OculusCompat {
     interface Runtime {
         void initialize();
 
-        void clearMirrorPipelines();
+        void beginMirrorFrame();
+
+        void releaseMirrorView(long viewId);
 
         boolean isShaderPackInUse();
 

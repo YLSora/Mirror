@@ -2,21 +2,16 @@ package com.mirror.mixin;
 
 import com.mirror.MirrorMod;
 import com.mirror.client.MirrorLevelRenderer;
-import com.mirror.client.MirrorTextureManager;
-import com.mirror.client.OculusCompat;
 import com.mojang.blaze3d.vertex.PoseStack;
 import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
-import net.minecraft.client.renderer.GameRenderer;
-import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.phys.AABB;
-import org.joml.Matrix4f;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -26,23 +21,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(LevelRenderer.class)
 abstract class LevelRendererMixin {
-    // Consume last frame's requests only after the current outer renderLevel has established its
-    // camera/tick state. The hook is immediately before vanilla clears the main target: Oculus'
-    // HEAD injection has already advanced the outer frame timer, while beginLevelRendering has
-    // not yet started, so nested captures share the correct temporal frame without contaminating
-    // the outer shader pass. Nested mirror renderLevel calls are excluded by the render stack.
-    @Inject(method = "renderLevel", at = @At(value = "INVOKE",
-            target = "Lcom/mojang/blaze3d/systems/RenderSystem;clear(IZ)V",
-            shift = At.Shift.BEFORE, remap = false))
-    private void mirror$renderPendingReflections(PoseStack poseStack, float partialTick, long finishTimeNano,
-                                                  boolean renderBlockOutline, Camera camera,
-                                                  GameRenderer gameRenderer, LightTexture lightTexture,
-                                                  Matrix4f projection, CallbackInfo callback) {
-        if (!MirrorLevelRenderer.isRenderingReflection() && !OculusCompat.isShadowPass()) {
-            MirrorTextureManager.processPending(camera, partialTick);
-        }
-    }
-
     @Inject(method = "renderEntity", at = @At("HEAD"), cancellable = true)
     private void mirror$hideTaggedEntity(Entity entity, double x, double y, double z, float partialTick,
                                          PoseStack poseStack, MultiBufferSource buffer, CallbackInfo callback) {
