@@ -3,8 +3,14 @@
 Mirror is a functional Minecraft 1.20.1 Forge mod that forked from Vista.
 Add a placeable mirror with real-time reflection mechanisms.
 
+The project is accomplished with the help of AI, and because of complex render there must be bugs.
+So welcome anyone capable of submitting fix issues.
+
 Mirror是模组Vista中的“镜子”向1.20.1Forge的功能移植模组。
 添加了镜子方块及其实时渲染机制。
+
+该项目由AI完成，渲染机制复杂难免存在bug
+欢迎大手子提交fix issues
 
 ## Description
 
