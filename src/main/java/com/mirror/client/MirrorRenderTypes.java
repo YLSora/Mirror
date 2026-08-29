@@ -24,10 +24,8 @@ public final class MirrorRenderTypes extends RenderType {
                             .setTransparencyState(TRANSLUCENT_TRANSPARENCY)
                             .setCullState(NO_CULL)
                             .setWriteMaskState(COLOR_DEPTH_WRITE)
-                            // Mirror is world translucent geometry, not a first-person/item-entity surface.
-                            // Keeping it in the world translucent target prevents later hand/item
-                            // composition from clearing or replacing the already-rendered mirror.
-                            .setOutputState(TRANSLUCENT_TARGET)
+                            // Keep the same world/Fabulous output semantics as entity surfaces.
+                            .setOutputState(ITEM_ENTITY_TARGET)
                             .createCompositeState(false)));
 
     /**

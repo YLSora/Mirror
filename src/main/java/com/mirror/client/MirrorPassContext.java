@@ -29,13 +29,14 @@ public final class MirrorPassContext implements AutoCloseable {
     private final Matrix4f previousModelView;
     private final Matrix4f previousProjection;
     private final Vec3 previousCameraPosition;
+    private final Vec3 cullingOrigin;
     private boolean closed;
 
     private MirrorPassContext(long viewId, int recursionDepth, RenderTarget captureTarget,
                               float nearPlane, float renderDistance,
                               MirrorProjection.UvRect reflectionCrop,
                               Matrix4f previousModelView, Matrix4f previousProjection,
-                              Vec3 previousCameraPosition) {
+                              Vec3 previousCameraPosition, Vec3 cullingOrigin) {
         if (recursionDepth < 0) throw new IllegalArgumentException("recursionDepth must be non-negative");
         if (captureTarget.width <= 0 || captureTarget.height <= 0) {
             throw new IllegalArgumentException("mirror capture target must have a positive size");
@@ -57,16 +58,17 @@ public final class MirrorPassContext implements AutoCloseable {
         this.previousModelView = new Matrix4f(previousModelView);
         this.previousProjection = new Matrix4f(previousProjection);
         this.previousCameraPosition = previousCameraPosition;
+        this.cullingOrigin = cullingOrigin;
     }
 
     public static MirrorPassContext begin(long viewId, int recursionDepth, RenderTarget captureTarget,
                                           float nearPlane, float renderDistance,
                                           MirrorProjection.UvRect reflectionCrop,
                                           Matrix4f previousModelView, Matrix4f previousProjection,
-                                          Vec3 previousCameraPosition) {
+                                          Vec3 previousCameraPosition, Vec3 cullingOrigin) {
         MirrorPassContext context = new MirrorPassContext(
                 viewId, recursionDepth, captureTarget, nearPlane, renderDistance, reflectionCrop,
-                previousModelView, previousProjection, previousCameraPosition);
+                previousModelView, previousProjection, previousCameraPosition, cullingOrigin);
         STACK.get().push(context);
         return context;
     }
@@ -132,6 +134,11 @@ public final class MirrorPassContext implements AutoCloseable {
 
     public Vec3 previousCameraPosition() {
         return previousCameraPosition;
+    }
+
+    /** Physical-world section used to seed chunk visibility for virtual mirror cameras. */
+    public Vec3 cullingOrigin() {
+        return cullingOrigin;
     }
 
     @Override

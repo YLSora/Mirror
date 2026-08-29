@@ -31,8 +31,10 @@ abstract class EmbeddiumRenderSectionManagerMixin {
 
     /**
      * Embeddium normally searches its configured main-world distance and does not observe
-     * GameRenderer.renderDistance. Apply Mirror's recursive distance budget to the actual
-     * Embeddium visibility graph as well.
+     * GameRenderer.renderDistance. For recursive mirror passes, use Mirror's anchored render
+     * distance as the visibility search radius. The reflected camera recedes from the player at
+     * deeper recursion levels, so this distance must grow (not shrink) to keep the loaded sections
+     * inside the search range; otherwise deep reflections search an empty region and render sky.
      */
     @Inject(method = "getSearchDistance()F", at = @At("RETURN"), cancellable = true,
             require = 1, remap = false)
@@ -40,9 +42,7 @@ abstract class EmbeddiumRenderSectionManagerMixin {
         if (!mirror$isDeepReflection()) return;
 
         float mirrorDistance = MirrorPassContext.current().renderDistance();
-        float embeddiumDistance = callback.getReturnValueF();
-        if (Float.isFinite(mirrorDistance) && mirrorDistance > 0.0f
-                && mirrorDistance < embeddiumDistance) {
+        if (Float.isFinite(mirrorDistance) && mirrorDistance > 0.0f) {
             callback.setReturnValue(mirrorDistance);
         }
     }

@@ -28,18 +28,30 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
 
     @Override
     public boolean shouldRender(MirrorBlockEntity entity, Vec3 cameraPos) {
-        double viewDistance = getViewDistance();
+        // A reflected camera is virtual and moves farther behind the physical mirrors at every
+        // recursion step. Applying the player's fixed mirror visibility distance to that camera
+        // silently stops submitting the opposite mirror after a few levels (typically depth 4),
+        // before maxRecursionDepth can take effect. The active pass distance is expanded to cover
+        // both the player's loaded-world radius and the virtual-camera displacement.
+        double viewDistance = MirrorPassContext.isActive()
+                ? MirrorPassContext.current().renderDistance()
+                : getViewDistance();
+        if (MirrorLevelRenderer.isRenderingReflection()) {
+            MirrorDiagnostics.recordShouldRender(MirrorLevelRenderer.getChildDepth());
+        }
         return entity.distanceToRenderBoundsSqr(cameraPos) <= viewDistance * viewDistance;
     }
 
     @Override
     public void render(MirrorBlockEntity entity, float partialTick, PoseStack poseStack,
                        MultiBufferSource buffer, int packedLight, int packedOverlay) {
+        if (FlashlightCompat.isAuxiliaryPass()) return;
         boolean renderingReflection = MirrorTextureManager.isRenderingReflection();
         if (OculusCompat.isShadowPass()) return;
         if (renderingReflection) {
             MirrorConfig.RecursionMode mode = MirrorConfig.CLIENT.recursionMode.get();
             if (mode == MirrorConfig.RecursionMode.OFF) return;
+            MirrorDiagnostics.recordRendererEntry(MirrorLevelRenderer.getChildDepth());
         }
         MirrorBlockEntity master = MirrorBlock.getMasterBlockEntity(entity.getLevel(), entity.getBlockPos());
         if (master == null || master.getBlockPos().equals(entity.getBlockPos()) == false) return;
@@ -60,7 +72,12 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
         Vec3 eye = camera.getPosition();
         if (!renderingReflection) eye = eye.add(MirrorLevelRenderer.getMainBobEyeOffset());
         MirrorReflection reflection = MirrorReflection.compute(planePoint, normal, eye);
-        if (!reflection.viewerInFront()) return;
+        if (!reflection.viewerInFront()) {
+            if (renderingReflection) {
+                MirrorDiagnostics.recordFacingRejected(MirrorLevelRenderer.getChildDepth());
+            }
+            return;
+        }
 
         MirrorReflectionTexture texture = !renderingReflection
                 ? MirrorTextureManager.request(entity)
@@ -69,7 +86,8 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
                 : MirrorTextureManager.requestRecursive(entity);
         if (texture == null) return;
         drawFace(entity, facing, recession, poseStack, buffer, texture.textureLocation(),
-                OculusCompat.shouldDeferSurfacePresentation());
+                OculusCompat.shouldDeferSurfacePresentation()
+                        || FlashlightCompat.shouldDeferSurfacePresentation());
     }
 
     private static void drawFace(MirrorBlockEntity entity, Direction facing, double recession,
@@ -99,14 +117,8 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
         surfaceVertex(vertices, pose, right, bottom, 1, 0);
         surfaceVertex(vertices, pose, right, top, 1, 1);
         surfaceVertex(vertices, pose, left, top, 0, 1);
-
-        // mirror_surface is a texture-specific custom RenderType, so it is not one of
-        // RenderBuffers' fixed types.  Do not leave its vertices pending in the caller's global
-        // BufferSource: whether they are eventually flushed would then depend on a later hand/item
-        // renderer (or on Flashier's albedo pass calling endBatch()).  That made an unlit
-        // flashlight/empty hand/translucent held item capable of suppressing the mirror, while an
-        // active flashlight accidentally made it reappear.  Close only our own batch here; this
-        // does not flush or reorder any other mod's buffered render types.
+        // Own this texture-specific batch so a later auxiliary renderer cannot flush it into a
+        // different target through the shared global BufferSource.
         if (buffer instanceof MultiBufferSource.BufferSource source) {
             source.endBatch(renderType);
         }

@@ -21,10 +21,16 @@ import java.util.Set;
  * Prevents stale persistent history from being consumed when a new reflected camera first enters a
  * shared pipeline, without clearing colortex every time already-known mirror views alternate.
  *
- * <p>The previous implementation cleared on every view-id switch. Two mirrors sharing one slot can
- * switch several times per outer frame, continuously resetting TAA/SSR/shadow history and producing
- * distant-material and entity-shadow flicker. A view now causes one full clear only on its first use
- * (or after the view is explicitly released).</p>
+ * <p>A view causes one full clear only on its first use (or after the view is explicitly released):
+ * normal A/B/A/B alternation between mirrors sharing one slot keeps TAA/SSR accumulation alive
+ * instead of forcing a clear each pass.</p>
+ *
+ * <p>Temporal accumulation is deliberately kept for every depth. Clearing the gbuffer every frame
+ * resets path-traced/temporal shaders (iterationT, Derivative, Sundial) to their fog-clear color and
+ * makes the recursive mirror-in-mirror render as a white screen, because those shaders need the
+ * accumulated history to converge. Stale-history jitter caused by budget deferral is instead handled
+ * by {@link com.mirror.client.MirrorViewHistory}'s frame-continuity guard, which returns the current
+ * matrices whenever the last commit was not the immediately preceding frame.</p>
  */
 @Pseudo
 @Mixin(targets = "net.irisshaders.iris.pipeline.IrisRenderingPipeline", remap = false)

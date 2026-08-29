@@ -11,6 +11,8 @@
     "GameRendererAccess",
     "GameRendererMixin",
     "PoseStackAccess",
-    "EmbeddiumRenderSectionManagerMixin"
+    "EmbeddiumRenderSectionManagerMixin",
+    "EmbeddiumOcclusionCullerMixin",
+    "EmbeddiumWorldRendererMixin"
   ]
 }

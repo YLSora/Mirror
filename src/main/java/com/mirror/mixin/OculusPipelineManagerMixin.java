@@ -56,8 +56,10 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
     /**
      * Constructor-warmed pipelines created while Oculus is already loading its primary pipeline.
      * They are resolution-agnostic until first claimed; Iris resizes its RenderTargets on the first
-     * beginLevelRendering call. Keeping two spares covers the normal direct + recursive buckets
-     * without compiling a complete Iris pipeline in a live mirror frame.
+     * beginLevelRendering call. One spare is warmed per recursion depth (up to maxRecursionDepth), so
+     * a tunnel rendered to its configured depth never has to compile a complete Iris pipeline in a
+     * live mirror frame. Each depth occupies its own slot, so the spare count grows linearly with
+     * maxRecursionDepth rather than exploding combinatorially.
      */
     @Unique
     private final Map<NamespacedId, Deque<MirrorPipelineState>> mirror$prewarmedPipelines = new HashMap<>();
@@ -102,7 +104,7 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
         mirror$primaryPipelineDimensions.put(primaryPipeline, realDimension);
         if (mirror$shaderGenerationFailed || !mirror$prewarmInitializedDimensions.add(realDimension)) return;
 
-        int desired = Math.min(2, Math.max(1, MirrorConfig.CLIENT.maxRecursionDepth.get()));
+        int desired = Math.max(1, MirrorConfig.CLIENT.maxRecursionDepth.get());
         Deque<MirrorPipelineState> warmed = mirror$prewarmedPipelines.computeIfAbsent(
                 realDimension, ignored -> new ArrayDeque<>());
         if (warmed.size() >= desired) return;

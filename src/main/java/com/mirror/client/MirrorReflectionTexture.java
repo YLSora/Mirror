@@ -147,7 +147,7 @@ public final class MirrorReflectionTexture implements AutoCloseable {
             // whole client down. Build-budget deferrals use the same path and retry on the next request.
             return;
         } finally {
-            MirrorDiagnostics.recordReflectionPass(System.nanoTime() - renderStart);
+            MirrorDiagnostics.recordReflectionPass(recursionDepth, System.nanoTime() - renderStart);
         }
         compose(mirror, capture.target(), captureProjection.crop());
         surfaceTexture.refreshId();

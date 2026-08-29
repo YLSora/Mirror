@@ -127,8 +127,30 @@ public final class MirrorLevelRenderer {
         GameRenderer gameRenderer = minecraft.gameRenderer;
         MinecraftAccess minecraftAccess = minecraft instanceof MinecraftAccess access ? access : null;
         float oldRenderDistance = gameRenderer.getRenderDistance();
-        double distanceScale = Math.pow(MirrorConfig.CLIENT.recursiveRenderDistanceDecay.get(), recursionDepth);
-        float mirrorRenderDistance = Math.max(1.0f, (float) (oldRenderDistance * distanceScale));
+        Vec3 reflectedEye = reflection.reflectedEye();
+        Vec3 playerEye = gameRenderer.getMainCamera().getPosition();
+        Direction mirrorFacing = mirror.getBlockState().getValue(com.mirror.common.MirrorBlock.FACING);
+        Vec3 mirrorNormal = Vec3.atLowerCornerOf(mirrorFacing.getNormal());
+        Vec3 up = new Vec3(0, 1, 0);
+        Vec3 right = mirrorNormal.cross(up).normalize();
+        double recession = com.mirror.common.MirrorBlock.surfaceRecession(mirror.getBlockState());
+        Vec3 mirrorPlanePoint = Vec3.atCenterOf(mirror.getBlockPos()).add(mirrorNormal.scale(
+                0.5 - recession));
+        // A mirror camera is virtual and can move outside Embeddium's physical SectionTree after
+        // several reflections. Seed section traversal immediately in front of the physical mirror
+        // instead of at that virtual eye; the reflected frustum still performs the actual visibility
+        // test once traversal reaches geometry inside the aperture.
+        Vec3 cullingOrigin = Vec3.atCenterOf(mirror.getBlockPos())
+                .add(mirrorNormal.scale(0.5 - recession))
+                .add(right.scale((1.0 - mirror.getConnectedWidth()) * 0.5))
+                .add(up.scale((mirror.getConnectedHeight() - 1.0) * 0.5))
+                .add(mirrorNormal);
+        // The reflected camera recedes from the player at deeper recursion levels (a mirror tunnel
+        // moves the eye by the mirror separation each reflection). Anchor the render/search distance
+        // to the player's loaded chunk range instead of decaying it toward zero, otherwise the deep
+        // mirror-in-mirror views cull every loaded section and render only the sky.
+        float mirrorRenderDistance = Math.max(oldRenderDistance,
+                oldRenderDistance + (float) reflectedEye.distanceTo(playerEye));
         float nearPlane = customProjection == null ? 0.05f : customProjection.nearPlane();
         float farPlane = Math.max(nearPlane + 1.0f, mirrorRenderDistance * 4.0f);
         MirrorProjection.UvRect reflectionCrop = customProjection == null
@@ -141,17 +163,12 @@ public final class MirrorLevelRenderer {
         Matrix4f viewMatrix = new Matrix4f()
                 .rotationX((float) Math.toRadians(pitch))
                 .rotateY((float) Math.toRadians(yaw + 180.0f));
-        Vec3 reflectedEye = reflection.reflectedEye();
         MirrorViewHistory.Snapshot previous = viewHistory.previousOr(viewMatrix, projection, reflectedEye);
         try (MirrorPassContext pass = MirrorPassContext.begin(
                 viewId, recursionDepth, target, nearPlane, mirrorRenderDistance, reflectionCrop,
-                previous.modelView(), previous.projection(), previous.cameraPosition())) {
+                previous.modelView(), previous.projection(), previous.cameraPosition(), cullingOrigin)) {
             MirrorRenderState renderState = MirrorRenderState.capture();
             Camera camera = new MirrorCamera();
-            Direction mirrorFacing = mirror.getBlockState().getValue(com.mirror.common.MirrorBlock.FACING);
-            Vec3 mirrorNormal = Vec3.atLowerCornerOf(mirrorFacing.getNormal());
-            Vec3 mirrorPlanePoint = Vec3.atCenterOf(mirror.getBlockPos()).add(mirrorNormal.scale(
-                    0.5 - com.mirror.common.MirrorBlock.surfaceRecession(mirror.getBlockState())));
             List<ReflectionPlane> reflectionPath = new java.util.ArrayList<>(parentReflectionPath);
             reflectionPath.add(new ReflectionPlane(mirrorPlanePoint, mirrorNormal));
             RenderFrame frame = new RenderFrame(mirror.getId(), recursionDepth,
@@ -167,9 +184,17 @@ public final class MirrorLevelRenderer {
             MirrorLevelRendererHooks.State cullState = null;
             boolean framePushed = false;
             boolean renderedFrame = false;
+            boolean oldSmartCull = minecraft.smartCull;
             DeferredMirrorSurfaceRenderer.PassScope deferredSurfaces = null;
             try {
                 oculusState.enterReflection();
+                // The reflected camera sits at a virtual mirror-image position. Physical
+                // occlusion culling around that position is meaningless: deep reflections
+                // recede behind the mirror into solid geometry, where Embeddium's smart
+                // occlusion graph blocks the traversal and leaves the capture with only the
+                // clear color (sky). Disable smart culling so every recursion depth reaches
+                // the loaded sections the mirror actually reflects.
+                minecraft.smartCull = false;
                 // Nested mirror textures are already fully composed images. Queue their physical
                 // surfaces until this mirror pipeline reaches finalizeLevelRendering, otherwise an
                 // entity/emissive G-buffer pass shades and tone-maps the child reflection twice.
@@ -204,17 +229,7 @@ public final class MirrorLevelRenderer {
                 RENDER_STACK.push(frame);
                 framePushed = true;
 
-                Direction facing = mirrorFacing;
-                Vec3 normal = mirrorNormal;
-                Vec3 up = new Vec3(0, 1, 0);
-                Vec3 right = normal.cross(up).normalize();
-                double recession = com.mirror.common.MirrorBlock.surfaceRecession(mirror.getBlockState());
-                Vec3 bfsStart = Vec3.atCenterOf(mirror.getBlockPos())
-                        .add(normal.scale(0.5 - recession))
-                        .add(right.scale((1.0 - mirror.getConnectedWidth()) * 0.5))
-                        .add(up.scale((mirror.getConnectedHeight() - 1.0) * 0.5))
-                        .add(normal);
-                cullState = MirrorLevelRendererHooks.prepare(minecraft.levelRenderer, camera, bfsStart,
+                cullState = MirrorLevelRendererHooks.prepare(minecraft.levelRenderer, camera, cullingOrigin,
                         textureState);
                 Matrix3f viewNormal = new Matrix3f(viewMatrix);
                 PoseStack poseStack = new PoseStack();
@@ -234,6 +249,7 @@ public final class MirrorLevelRenderer {
                         throw new IllegalStateException("Mirror render frames closed out of order");
                     }
                 }
+                minecraft.smartCull = oldSmartCull;
                 if (minecraftAccess != null) minecraftAccess.mirror$setMainRenderTarget(mainTarget);
                 // Restore the exact outer Oculus pipeline and captured state before the outer
                 // framebuffer is bound. Iris' RenderTarget listener reads the active pipeline at

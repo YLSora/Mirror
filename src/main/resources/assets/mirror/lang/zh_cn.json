@@ -1,5 +1,20 @@
 {
   "block.mirror.mirror": "镜子方块",
   "item.mirror.mirror": "镜子",
-  "item.mirror.crystalline": "晶珠"
+  "item.mirror.crystalline": "晶珠",
+  "mirror.config.maxConnectedSize": "最大连接尺寸",
+  "mirror.config.squareAspectRatio": "仅允许方形比例",
+  "mirror.config.placementMode": "放置模式",
+  "mirror.config.enableObservation": "启用末影人观察",
+  "mirror.config.renderDistance": "反射渲染距离",
+  "mirror.config.resolutionScale": "分辨率倍率",
+  "mirror.config.smoothSampling": "平滑采样",
+  "mirror.config.recursionMode": "递归模式",
+  "mirror.config.maxRecursionDepth": "最大递归深度",
+  "mirror.config.recursiveResolutionDecay": "递归分辨率衰减",
+  "mirror.config.reflectionFrameBudgetMs": "每帧反射时间预算（毫秒）",
+  "mirror.config.maxRecursiveViews": "最大递归视图数",
+  "mirror.config.recursiveCullMinPixels": "递归剔除最小像素",
+  "mirror.config.debug": "调试日志"
 }
+

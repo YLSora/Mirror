@@ -1,5 +1,20 @@
 {
   "block.mirror.mirror": "Mirror",
   "item.mirror.mirror": "Mirror",
-  "item.mirror.crystalline": "Crystalline"
+  "item.mirror.crystalline": "Crystalline",
+  "mirror.config.maxConnectedSize": "Max Connected Size",
+  "mirror.config.squareAspectRatio": "Square Aspect Ratio",
+  "mirror.config.placementMode": "Placement Mode",
+  "mirror.config.enableObservation": "Enable Enderman Observation",
+  "mirror.config.renderDistance": "Render Distance",
+  "mirror.config.resolutionScale": "Resolution Scale",
+  "mirror.config.smoothSampling": "Smooth Sampling",
+  "mirror.config.recursionMode": "Recursion Mode",
+  "mirror.config.maxRecursionDepth": "Max Recursion Depth",
+  "mirror.config.recursiveResolutionDecay": "Recursive Resolution Decay",
+  "mirror.config.reflectionFrameBudgetMs": "Reflection Frame Budget (ms)",
+  "mirror.config.maxRecursiveViews": "Max Recursive Views",
+  "mirror.config.recursiveCullMinPixels": "Recursive Cull Min Pixels",
+  "mirror.config.debug": "Debug"
 }
+

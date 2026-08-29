@@ -22,7 +22,15 @@ public final class MirrorTextureManager {
     private static final Map<MirrorTextureKey, MirrorReflectionTexture> TEXTURES = new HashMap<>();
     private static final Map<MirrorTextureKey, Pending> PENDING = new HashMap<>();
     private static final Map<MirrorTextureKey, Long> LAST_USED_FRAME = new HashMap<>();
+    /**
+     * Views whose layout grew beyond their surface target's capacity. Their GL buffers are destroyed
+     * only after the replacement view has rendered its first frame, so a shader pipeline or a
+     * deferred surface that still references the old target during the resolution transition never
+     * touches a destroyed texture object.
+     */
+    private static final List<MirrorReflectionTexture> RETIRED = new ArrayList<>();
     private static long frameIndex;
+    private static int recursiveViewCount;
 
     private MirrorTextureManager() {
     }
@@ -52,10 +60,33 @@ public final class MirrorTextureManager {
     /** Schedules a texture for one recursive parent chain. */
     public static MirrorReflectionTexture requestRecursive(MirrorBlockEntity mirror) {
         int depth = MirrorLevelRenderer.getChildDepth();
+        MirrorDiagnostics.recordRecursiveRequest(depth);
         // recursionDepth is zero-based: the direct mirror pass is depth 0, so a child at
         // depth 1 is already the second visible reflection. Treat maxRecursionDepth as the
         // user-facing total reflection count: 1 = direct only, 2 = one mirror-in-mirror, etc.
         if (depth >= MirrorConfig.CLIENT.maxRecursionDepth.get()) return null;
+
+        // The recursion is bounded by maxRecursionDepth (the depth check above) and, for a real
+        // mirror tunnel, by the sub-pixel cull below: each extra reflection is geometrically
+        // smaller, so the chain naturally dies out. No deep/convergence collapse is applied, which
+        // previously capped the visible mirror-in-mirror count at depth 2 regardless of the
+        // configured maxRecursionDepth.
+        List<MirrorLevelRenderer.ReflectionPlane> reflectionPath =
+                MirrorLevelRenderer.getChildReflectionPath();
+        // Rendering-principle cull: a child mirror only needs its own reflection when it is large
+        // enough inside the parent mirror to be seen. Its apparent width is its screen width over
+        // its distance to the parent plane; below the threshold its reflection is sub-pixel, so
+        // dropping the chain here prunes the combinatorial recursion tree at its source instead of
+        // letting every distant mirror spawn its own mirror-in-mirror subtree.
+        double minPixels = MirrorConfig.CLIENT.recursiveCullMinPixels.get();
+        if (minPixels > 0.0 && !reflectionPath.isEmpty()) {
+            MirrorLevelRenderer.ReflectionPlane parentPlane =
+                    reflectionPath.get(reflectionPath.size() - 1);
+            double distance = Math.abs(Vec3.atCenterOf(mirror.getBlockPos())
+                    .subtract(parentPlane.point()).dot(parentPlane.normal()));
+            double apparentWidth = mirror.getScreenPixelWidth() / Math.max(1.0, distance);
+            if (apparentWidth < minPixels) return null;
+        }
 
         List<UUID> parentChain = MirrorLevelRenderer.getChildParentChain();
         int[] dimensions = recursiveDimensions(mirror, depth);
@@ -64,7 +95,7 @@ public final class MirrorTextureManager {
         MirrorReflectionTexture texture = getOrCreate(key, mirror);
         if (texture == null) return null;
         markUsed(key);
-        PENDING.put(key, new Pending(key, mirror, MirrorLevelRenderer.getChildReflectionPath()));
+        PENDING.put(key, new Pending(key, mirror, reflectionPath));
         return texture.hasRendered() ? texture : null;
     }
 
@@ -76,6 +107,7 @@ public final class MirrorTextureManager {
      */
     public static void processPending(Camera camera, float partialTick) {
         frameIndex++;
+        MirrorViewHistory.beginFrame();
         OculusCompat.beginMirrorFrame();
         MirrorDiagnostics.beginOuterFrame(PENDING.size());
         evictStaleViews();
@@ -89,11 +121,22 @@ public final class MirrorTextureManager {
         Vec3 mainEye = camera.getPosition().add(MirrorLevelRenderer.getMainBobEyeOffset());
         List<Pending> pending = new ArrayList<>(PENDING.values());
         PENDING.clear();
-        // A parent capture samples completed child surfaces. Refresh the deepest textures first
-        // so depth 0 never races a child discovered during the previous frame.
-        pending.sort(Comparator.comparingInt(
-                (Pending value) -> value.key().depth()).reversed());
+        // Render deepest-first so a parent pass always samples a child surface composed earlier in
+        // this same frame; that keeps every recursion depth at ~0 added-frame latency. The per-frame
+        // budget then only defers recursive (depth > 0) views once the budget is exhausted, so the
+        // direct (depth 0) mirror the player is looking at always stays fresh.
+        pending.sort(Comparator.comparingInt((Pending value) -> value.key().depth()).reversed());
+
+        long budgetNanos = (long) (MirrorConfig.CLIENT.reflectionFrameBudgetMs.get() * 1_000_000.0D);
+        long frameStart = System.nanoTime();
+        List<Pending> deferred = null;
         for (Pending value : pending) {
+            if (value.key().depth() > 0
+                    && budgetNanos > 0L && System.nanoTime() - frameStart >= budgetNanos) {
+                if (deferred == null) deferred = new ArrayList<>();
+                deferred.add(value);
+                continue;
+            }
             MirrorReflectionTexture texture = TEXTURES.get(value.key());
             if (texture == null) continue;
             Vec3 eye = MirrorLevelRenderer.resolveReflectionPath(mainEye, value.parentPath());
@@ -101,6 +144,15 @@ public final class MirrorTextureManager {
                 texture.render(minecraft.level, value.mirror(), eye, partialTick, value.parentPath());
             }
         }
+        if (deferred != null) {
+            MirrorDiagnostics.recordDeferredViews(deferred.size());
+            for (Pending value : deferred) {
+                PENDING.put(value.key(), value);
+            }
+        }
+        // Views retired by this frame's layout growth can now be destroyed: their replacement view
+        // has either rendered its first frame or has been deferred with the old target still valid.
+        closeRetired();
     }
 
     public static boolean isRenderingReflection() {
@@ -121,6 +173,8 @@ public final class MirrorTextureManager {
         LAST_USED_FRAME.clear();
         TEXTURES.values().forEach(MirrorReflectionTexture::close);
         TEXTURES.clear();
+        closeRetired();
+        recursiveViewCount = 0;
         frameIndex = 0L;
         MirrorCapturePool.clear();
         MirrorLevelRenderer.clearContext();
@@ -144,8 +198,10 @@ public final class MirrorTextureManager {
     }
 
     private static int[] recursiveDimensions(MirrorBlockEntity mirror, int depth) {
+        // Depth 1 is the visible first mirror-in-mirror, so keep it at full resolution for
+        // crispness. Apply the configured decay to every independently rendered deeper level.
         double scale = MirrorConfig.CLIENT.resolutionScale.get()
-                * Math.pow(MirrorConfig.CLIENT.recursiveResolutionDecay.get(), depth);
+                * Math.pow(MirrorConfig.CLIENT.recursiveResolutionDecay.get(), Math.max(0, depth - 1));
         return new int[]{
                 Math.max(1, (int) Math.round(mirror.getScreenPixelWidth() * scale)),
                 Math.max(1, (int) Math.round(mirror.getScreenPixelHeight() * scale))
@@ -173,7 +229,13 @@ public final class MirrorTextureManager {
                     mirror.getScreenPixelWidth(), mirror.getScreenPixelHeight())) {
                 reusable = oldTexture;
             } else {
-                oldTexture.close();
+                if (oldKey.depth() > 0) recursiveViewCount--;
+                // Retire instead of closing here. The old surface target is replaced by a larger one
+                // and its GL buffers must stay alive until the replacement view finishes its first
+                // compose; destroying them immediately leaves the active pipeline sampling a freed
+                // texture during the resolution-bucket switch (Oculus reports "invalid texture
+                // object" / "y exceeds").
+                RETIRED.add(oldTexture);
             }
             break;
         }
@@ -181,9 +243,21 @@ public final class MirrorTextureManager {
             TEXTURES.put(key, reusable);
             return reusable;
         }
-        return TEXTURES.computeIfAbsent(key, ignored -> new MirrorReflectionTexture(
-                key.width(), key.height(), mirror.getScreenPixelWidth(), mirror.getScreenPixelHeight(),
-                key.depth(), key.parentChain()));
+        MirrorReflectionTexture created = TEXTURES.get(key);
+        if (created == null) {
+            // R0 hard cap: bound the chain-isolated recursive texture set. Direct (depth 0) views
+            // are never capped; only new mirror-in-mirror chains are truncated once the cap is hit.
+            if (key.depth() > 0
+                    && recursiveViewCount >= MirrorConfig.CLIENT.maxRecursiveViews.get()) {
+                return null;
+            }
+            created = new MirrorReflectionTexture(
+                    key.width(), key.height(), mirror.getScreenPixelWidth(), mirror.getScreenPixelHeight(),
+                    key.depth(), key.parentChain());
+            if (key.depth() > 0) recursiveViewCount++;
+            TEXTURES.put(key, created);
+        }
+        return created;
     }
 
     private static void markUsed(MirrorTextureKey key) {
@@ -204,6 +278,7 @@ public final class MirrorTextureManager {
 
             iterator.remove();
             LAST_USED_FRAME.remove(key);
+            if (key.depth() > 0) recursiveViewCount--;
             entry.getValue().close();
             evicted = true;
         }
@@ -214,6 +289,15 @@ public final class MirrorTextureManager {
         if (evicted && TEXTURES.isEmpty() && PENDING.isEmpty()) {
             MirrorCapturePool.clear();
         }
+    }
+
+    /** Destroys the GL buffers of views retired by a layout growth, after their replacement rendered. */
+    private static void closeRetired() {
+        if (RETIRED.isEmpty()) return;
+        for (MirrorReflectionTexture texture : RETIRED) {
+            texture.close();
+        }
+        RETIRED.clear();
     }
 
     private record Pending(MirrorTextureKey key, MirrorBlockEntity mirror,

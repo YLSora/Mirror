@@ -45,6 +45,18 @@ abstract class LevelRendererMixin {
         return renderer.isChunkCompiled(blockPos);
     }
 
+    // Block entities in this loop already come from the reflection pass's visible render sections.
+    // Applying the physical block-entity box to the virtual reflected-camera frustum a second time
+    // rejects the opposite mirror once the virtual camera has receded through several reflections.
+    // That used to stop new recursive requests around depth 4 regardless of maxRecursionDepth.
+    @Redirect(method = "renderLevel", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/client/renderer/culling/Frustum;isVisible(" +
+                    "Lnet/minecraft/world/phys/AABB;)Z"))
+    private boolean mirror$useRecursiveBlockEntitySectionVisibility(Frustum frustum, AABB bounds) {
+        if (MirrorLevelRenderer.isRecursivePass()) return true;
+        return frustum.isVisible(bounds);
+    }
+
     // Vanilla has a second LocalPlayer-only gate in renderLevel: when the active camera entity
     // is not the LocalPlayer, that gate suppresses the local player even for a detached camera.
     // Reflection cameras intentionally use an unregistered dummy entity so dispatcher/camera
