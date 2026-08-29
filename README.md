@@ -18,7 +18,8 @@ Mirror是模组Vista中的“镜子”向1.20.1Forge的功能移植模组。
 
 Original authors: MehVahdJukaar, Plantkillable
     <https://github.com/MehVahdJukaar/cameramod>
-Projected by: MinazukiSora, gpt 5.6 sol high.
+
+Projected by: MinazukiSora, gpt 5.6 sol high, Deepseek v4 pro.
     <https://github.com/YLSora/Mirror>
 
 ## Requirements
@@ -31,12 +32,6 @@ Build with Java 17:
 
 ```text
 gradlew clean build
-gradlew runClient
-gradlew runServer
 ```
 
-The observation feature checks the player's ray against the mirror surface,
-reflects that ray, and applies vanilla Enderman freeze/anger behavior to nearby
-Endermen.
-
-See [NOTICE.md](NOTICE.md) and [LICENSE.md](LICENSE.md) before redistributing.
+This is an unofficial fork of vista. Do not report issues to the official repository.
