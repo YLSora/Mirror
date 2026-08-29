@@ -19,7 +19,15 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-@Mixin(LevelRenderer.class)
+// Priority must stay below Valkyrien Skies' client.render.MixinLevelRenderer (priority 1000):
+// both mods redirect the same Frustum.isVisible(AABB) call in renderLevel, and only the first
+// claimant (higher priority) can keep it. If Mirror claimed the call first, VS2's
+// dontClipTileEntities redirect would be skipped and VS2's mixin (injectors.defaultRequire=1)
+// would fail its injection check, aborting the whole LevelRenderer transformation (observed as
+// the oculus-batched-entity-rendering MixinLevelRenderer_EntityListSorting "Found 0 candidate
+// variables" crash). Yielding at 990 lets VS2 apply normally; the recursive-pass block-entity
+// bypass below still engages in packs that do not claim the same call (no Valkyrien Skies).
+@Mixin(value = LevelRenderer.class, priority = 990)
 abstract class LevelRendererMixin {
     @Inject(method = "renderEntity", at = @At("HEAD"), cancellable = true)
     private void mirror$hideTaggedEntity(Entity entity, double x, double y, double z, float partialTick,
