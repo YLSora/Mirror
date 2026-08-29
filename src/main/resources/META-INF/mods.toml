@@ -9,6 +9,7 @@ version="${mod_version}"
 displayName="${mod_name}"
 authors="${mod_author}"
 description='''${mod_description}'''
+logoFile="icon.png"
 
 [[mixins]]
 config="mirror.mixins.json"
