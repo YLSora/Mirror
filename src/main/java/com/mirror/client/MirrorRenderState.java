@@ -3,6 +3,7 @@ package com.mirror.client;
 import com.mojang.blaze3d.shaders.FogShape;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexSorting;
 import com.mirror.mixin.PoseStackAccess;
@@ -112,8 +113,14 @@ final class MirrorRenderState {
         drawBuffer = GL11C.glGetInteger(GL11C.GL_DRAW_BUFFER);
         readBuffer = GL11C.glGetInteger(GL11C.GL_READ_BUFFER);
         activeTexture = GL11C.glGetInteger(GL13C.GL_ACTIVE_TEXTURE);
-        textures = new int[]{RenderSystem.getShaderTexture(0), RenderSystem.getShaderTexture(1),
-                RenderSystem.getShaderTexture(2), RenderSystem.getShaderTexture(3)};
+        // VertexBuffer copies all twelve RenderSystem shader-texture slots into every vanilla
+        // ShaderInstance before drawing. Preserve the same complete logical sampler state; restoring
+        // only the first four slots lets a nested world pass leak its higher sampler assignments into
+        // later item and GUI draws.
+        textures = new int[12];
+        for (int unit = 0; unit < textures.length; unit++) {
+            textures[unit] = RenderSystem.getShaderTexture(unit);
+        }
         // Minecraft's GlStateManager exposes 128 texture slots, but its active-texture
         // bookkeeping is not safe at the driver-reported upper bound. Iris/Oculus uses the
         // low sampler range for all world and composite passes; restore that complete range.
@@ -149,6 +156,12 @@ final class MirrorRenderState {
     void restore() {
         RenderSystem.viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
         scissorState.restore();
+        // BufferUploader caches the last bound VertexBuffer in its static lastImmediateBuffer field
+        // and skips glBindVertexArray when the next draw reuses that same VertexBuffer, assuming its
+        // VAO is still bound. We change the VAO binding directly below (bypassing VertexBuffer.bind),
+        // so without invalidating that cache the first-person hand/item pass can draw with a stale
+        // "already bound" assumption and hit GL_INVALID_OPERATION "Array object is not active".
+        BufferUploader.invalidate();
         GlStateManager._glBindVertexArray(vertexArray);
         GlStateManager._glBindBuffer(GL15C.GL_ARRAY_BUFFER, arrayBuffer);
         GlStateManager._glBindBuffer(GL15C.GL_ELEMENT_ARRAY_BUFFER, elementArrayBuffer);

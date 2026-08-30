@@ -204,10 +204,9 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         } finally {
             if (applied) shader.clear();
             surfaceTarget.unbindWrite();
-            // Composition runs after the nested transaction restores Oculus but immediately before
-            // the outer LevelRenderer clears its target and begins the shader pipeline. That outer
-            // setup re-establishes render state, so avoid a second full GL snapshot here: it adds
-            // dozens of synchronous texture-state queries per visible mirror.
+            // Normalize the target and basic draw state for another reflection in this batch. The
+            // processPending transaction owns restoration of the caller's exact GL/RenderSystem state
+            // after every queued world render and composition has completed.
             mainTarget.bindWrite(true);
             RenderSystem.viewport(0, 0, mainTarget.width, mainTarget.height);
             outerScissor.restore();

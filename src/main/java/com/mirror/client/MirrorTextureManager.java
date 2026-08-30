@@ -118,6 +118,19 @@ public final class MirrorTextureManager {
             return;
         }
 
+        // The complete pending-reflection phase runs between the outer world and first-person hand
+        // passes. Treat every nested world render and its subsequent composition as one off-screen
+        // transaction so neither phase can leak GL/RenderSystem state into the hand, HUD, or next
+        // outer frame.
+        MirrorRenderState outerRenderState = MirrorRenderState.capture();
+        try {
+            renderPending(minecraft, camera, partialTick);
+        } finally {
+            outerRenderState.restore();
+        }
+    }
+
+    private static void renderPending(Minecraft minecraft, Camera camera, float partialTick) {
         Vec3 mainEye = camera.getPosition().add(MirrorLevelRenderer.getMainBobEyeOffset());
         List<Pending> pending = new ArrayList<>(PENDING.values());
         PENDING.clear();

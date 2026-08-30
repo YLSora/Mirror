@@ -8,6 +8,7 @@ import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
 import org.joml.Matrix4f;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -49,15 +50,18 @@ abstract class GameRendererMixin {
     }
 
     /**
-     * Consume last frame's mirror requests only after the outer GameRenderer world pass has
-     * completely returned. MirrorLevelRenderer calls LevelRenderer directly, so this keeps every
-     * reflected world render out of the outer LevelRenderer.renderLevel call stack while still
-     * rendering the full entity pipeline (including PlayerRenderer/YSM) into the mirror target.
+     * Consume last frame's mirror requests after the outer LevelRenderer has returned but before
+     * GameRenderer starts the first-person hand pass. MirrorLevelRenderer can therefore render the
+     * full entity pipeline (including PlayerRenderer/YSM) without re-entering an active world pass,
+     * while vanilla hand and GUI rendering still establish their own normal item-dependent state
+     * after all off-screen work is complete.
      *
-     * The resulting mirror texture is intentionally one outer frame behind the request that
-     * produced it, which was already true for the previous pending-request design.
+     * The renderHand field is read exactly once at this boundary in 1.20.1. Inject before the read so
+     * reflection updates also run when hand rendering is disabled (third person, panorama, etc.).
      */
-    @Inject(method = "renderLevel", at = @At("TAIL"))
+    @Inject(method = "renderLevel", at = @At(value = "FIELD",
+            target = "Lnet/minecraft/client/renderer/GameRenderer;renderHand:Z",
+            opcode = Opcodes.GETFIELD, ordinal = 0))
     private void mirror$renderPendingReflections(float partialTick, long finishTimeNano,
                                                   PoseStack renderPose, CallbackInfo callback) {
         if (MirrorLevelRenderer.isRenderingReflection() || OculusCompat.isShadowPass()) return;
