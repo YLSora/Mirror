@@ -1,9 +1,9 @@
 package com.mirror.mixin;
 
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import com.mirror.MirrorMod;
 import com.mirror.client.MirrorLevelRenderer;
 import com.mojang.blaze3d.vertex.PoseStack;
-import net.minecraft.client.Camera;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -19,14 +19,8 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-// Priority must stay below Valkyrien Skies' client.render.MixinLevelRenderer (priority 1000):
-// both mods redirect the same Frustum.isVisible(AABB) call in renderLevel, and only the first
-// claimant (higher priority) can keep it. If Mirror claimed the call first, VS2's
-// dontClipTileEntities redirect would be skipped and VS2's mixin (injectors.defaultRequire=1)
-// would fail its injection check, aborting the whole LevelRenderer transformation (observed as
-// the oculus-batched-entity-rendering MixinLevelRenderer_EntityListSorting "Found 0 candidate
-// variables" crash). Yielding at 990 lets VS2 apply normally; the recursive-pass block-entity
-// bypass below still engages in packs that do not claim the same call (no Valkyrien Skies).
+// Run after VS (1000) and Tweakerge (1001). The value modifiers consume their redirected
+// calls' results without competing for ownership of those calls or bypassing their handlers.
 @Mixin(value = LevelRenderer.class, priority = 990)
 abstract class LevelRendererMixin {
     @Inject(method = "renderEntity", at = @At("HEAD"), cancellable = true)
@@ -57,28 +51,27 @@ abstract class LevelRendererMixin {
     // Applying the physical block-entity box to the virtual reflected-camera frustum a second time
     // rejects the opposite mirror once the virtual camera has receded through several reflections.
     // That used to stop new recursive requests around depth 4 regardless of maxRecursionDepth.
-    @Redirect(method = "renderLevel", at = @At(value = "INVOKE",
+    @ModifyExpressionValue(method = "renderLevel", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/client/renderer/culling/Frustum;isVisible(" +
-                    "Lnet/minecraft/world/phys/AABB;)Z"))
-    private boolean mirror$useRecursiveBlockEntitySectionVisibility(Frustum frustum, AABB bounds) {
-        if (MirrorLevelRenderer.isRecursivePass()) return true;
-        return frustum.isVisible(bounds);
+                    "Lnet/minecraft/world/phys/AABB;)Z"), require = 1)
+    private boolean mirror$useRecursiveBlockEntitySectionVisibility(boolean visible) {
+        return visible || MirrorLevelRenderer.isRecursivePass();
     }
 
     // Vanilla has a second LocalPlayer-only gate in renderLevel: when the active camera entity
     // is not the LocalPlayer, that gate suppresses the local player even for a detached camera.
     // Reflection cameras intentionally use an unregistered dummy entity so dispatcher/camera
-    // positions stay coherent. Redirect only this fourth Camera#getEntity call (ordinal 3 in
-    // 1.20.1) so the LocalPlayer remains a normal world entity in every reflection depth.
-    @Redirect(method = "renderLevel", at = @At(value = "INVOKE",
+    // positions stay coherent. Modify only the result of the fourth Camera#getEntity call
+    // (ordinal 3 in 1.20.1), including when Tweakerge redirects it. Other passes retain its result.
+    @ModifyExpressionValue(method = "renderLevel", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/client/Camera;getEntity()Lnet/minecraft/world/entity/Entity;",
-            ordinal = 3))
-    private Entity mirror$allowLocalPlayerInReflection(Camera camera) {
+            ordinal = 3), require = 1)
+    private Entity mirror$allowLocalPlayerInReflection(Entity cameraEntity) {
         if (MirrorLevelRenderer.isRenderingReflection()) {
             Entity player = Minecraft.getInstance().player;
             if (player != null) return player;
         }
-        return camera.getEntity();
+        return cameraEntity;
     }
 
     // EntityRenderer#shouldRender first applies the entity's normal distance limit to the

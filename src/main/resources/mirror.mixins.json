@@ -10,6 +10,8 @@
     "MinecraftAccess",
     "GameRendererAccess",
     "GameRendererMixin",
+    "BlendModeAccess",
+    "GlStateManagerAccess",
     "PoseStackAccess",
     "EmbeddiumRenderSectionManagerMixin",
     "EmbeddiumOcclusionCullerMixin",

@@ -1,11 +1,14 @@
 package com.mirror.client;
 
-import com.mojang.blaze3d.shaders.FogShape;
 import com.mojang.blaze3d.platform.GlStateManager;
+import com.mojang.blaze3d.shaders.BlendMode;
+import com.mojang.blaze3d.shaders.FogShape;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferUploader;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexSorting;
+import com.mirror.mixin.BlendModeAccess;
+import com.mirror.mixin.GlStateManagerAccess;
 import com.mirror.mixin.PoseStackAccess;
 import net.minecraft.client.renderer.ShaderInstance;
 import org.joml.Matrix3f;
@@ -28,8 +31,8 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 
-/** Complete render-thread snapshot for one off-screen world pass. */
-final class MirrorRenderState {
+/** GL and renderer cache snapshot for an off-screen world pass or reflection batch. */
+public final class MirrorRenderState {
     private final Matrix4f projection;
     private final Matrix4f savedProjection;
     private final VertexSorting vertexSorting;
@@ -41,7 +44,6 @@ final class MirrorRenderState {
     private final ScissorState scissorState;
     private final int vertexArray;
     private final int arrayBuffer;
-    private final int elementArrayBuffer;
     private final int pixelPackBuffer;
     private final int pixelUnpackBuffer;
     private final int drawFramebuffer;
@@ -52,6 +54,7 @@ final class MirrorRenderState {
     private final int[] textures;
     private final int[] texture2dBindings;
     private final ShaderInstance shader;
+    private final BlendMode lastAppliedBlendMode;
     private final int program;
     private final float[] shaderColor;
     private final float fogStart;
@@ -87,6 +90,7 @@ final class MirrorRenderState {
         modelViewStack = captureModelViewStack();
         textureMatrix = new Matrix4f(RenderSystem.getTextureMatrix());
         shader = RenderSystem.getShader();
+        lastAppliedBlendMode = BlendModeAccess.mirror$getLastApplied();
         program = GL20C.glGetInteger(GL20C.GL_CURRENT_PROGRAM);
         shaderColor = RenderSystem.getShaderColor().clone();
         fogStart = RenderSystem.getShaderFogStart();
@@ -105,7 +109,6 @@ final class MirrorRenderState {
         scissorState = captureScissorState();
         vertexArray = GL30C.glGetInteger(GL30C.GL_VERTEX_ARRAY_BINDING);
         arrayBuffer = GL15C.glGetInteger(GL15C.GL_ARRAY_BUFFER_BINDING);
-        elementArrayBuffer = GL15C.glGetInteger(GL15C.GL_ELEMENT_ARRAY_BUFFER_BINDING);
         pixelPackBuffer = GL21C.glGetInteger(GL21C.GL_PIXEL_PACK_BUFFER_BINDING);
         pixelUnpackBuffer = GL21C.glGetInteger(GL21C.GL_PIXEL_UNPACK_BUFFER_BINDING);
         drawFramebuffer = GL30C.glGetInteger(GL30C.GL_DRAW_FRAMEBUFFER_BINDING);
@@ -121,10 +124,9 @@ final class MirrorRenderState {
         for (int unit = 0; unit < textures.length; unit++) {
             textures[unit] = RenderSystem.getShaderTexture(unit);
         }
-        // Minecraft's GlStateManager exposes 128 texture slots, but its active-texture
-        // bookkeeping is not safe at the driver-reported upper bound. Iris/Oculus uses the
-        // low sampler range for all world and composite passes; restore that complete range.
-        int textureUnitCount = Math.min(32,
+        // Vanilla caches twelve units; Oculus expands the array. Only visit units supported by
+        // both the driver and the active cache so restoration can keep both layers synchronized.
+        int textureUnitCount = Math.min(Math.min(32, GlStateManagerAccess.mirror$getTextures().length),
                 Math.max(1, GL20C.glGetInteger(GL20C.GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS)));
         texture2dBindings = new int[textureUnitCount];
         for (int unit = 0; unit < textureUnitCount; unit++) {
@@ -163,8 +165,10 @@ final class MirrorRenderState {
         // "already bound" assumption and hit GL_INVALID_OPERATION "Array object is not active".
         BufferUploader.invalidate();
         GlStateManager._glBindVertexArray(vertexArray);
+        // The element buffer belongs to the VAO, not the global binding state. A nested pass
+        // can reuse this VertexBuffer and update its sequentialIndices cache. Rebinding a saved
+        // EBO would undo only the GPU side, so later uploads could skip a necessary index bind.
         GlStateManager._glBindBuffer(GL15C.GL_ARRAY_BUFFER, arrayBuffer);
-        GlStateManager._glBindBuffer(GL15C.GL_ELEMENT_ARRAY_BUFFER, elementArrayBuffer);
         GlStateManager._glBindBuffer(GL21C.GL_PIXEL_PACK_BUFFER, pixelPackBuffer);
         GlStateManager._glBindBuffer(GL21C.GL_PIXEL_UNPACK_BUFFER, pixelUnpackBuffer);
         GL30C.glBindFramebuffer(GL30C.GL_DRAW_FRAMEBUFFER, drawFramebuffer);
@@ -196,13 +200,15 @@ final class MirrorRenderState {
         restoreShaderLights(shaderLights);
         for (int i = 0; i < textures.length; i++) RenderSystem.setShaderTexture(i, textures[i]);
         for (int unit = 0; unit < texture2dBindings.length; unit++) {
-            RenderSystem.activeTexture(GL13C.GL_TEXTURE0 + unit);
-            if (unit < 12) {
-                RenderSystem.bindTexture(texture2dBindings[unit]);
-            } else {
-                GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, texture2dBindings[unit]);
-            }
+            int textureUnit = GL13C.GL_TEXTURE0 + unit;
+            // Raw calls establish the driver state even if a stale cache would skip the bind.
+            // The paired RenderSystem calls then synchronize Minecraft/Oculus bookkeeping.
+            GL13C.glActiveTexture(textureUnit);
+            RenderSystem.activeTexture(textureUnit);
+            GL11C.glBindTexture(GL11C.GL_TEXTURE_2D, texture2dBindings[unit]);
+            RenderSystem.bindTexture(texture2dBindings[unit]);
         }
+        GL13C.glActiveTexture(activeTexture);
         RenderSystem.activeTexture(activeTexture);
 
         RenderSystem.depthFunc(depthFunc);
@@ -218,6 +224,11 @@ final class MirrorRenderState {
         setState(GL11C.GL_CULL_FACE, cull, RenderSystem::enableCull, RenderSystem::disableCull);
         setState(GL11C.GL_POLYGON_OFFSET_FILL, polygonOffset,
                 RenderSystem::enablePolygonOffset, RenderSystem::disablePolygonOffset);
+        // ShaderInstance.clear() leaves this cache intact. The opaque mirror composite changes
+        // it, so restoring GL alone can make the next hand shader re-enable blending after its
+        // RenderType disabled it. Restore the exact entry, including null; applying or simply
+        // invalidating it would change the caller's blend state or its next shader transition.
+        BlendModeAccess.mirror$setLastApplied(lastAppliedBlendMode);
     }
 
 
