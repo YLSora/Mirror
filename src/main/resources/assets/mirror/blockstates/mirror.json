@@ -1,5 +1,261 @@
 {
   "variants": {
+    "facing=up,far=false,connection=single": {
+      "model": "mirror:block/mirror",
+      "x": 270
+    },
+    "facing=up,far=false,connection=center": {
+      "model": "mirror:block/mirror_center",
+      "x": 270
+    },
+    "facing=up,far=false,connection=top": {
+      "model": "mirror:block/mirror_top",
+      "x": 270
+    },
+    "facing=up,far=false,connection=bottom": {
+      "model": "mirror:block/mirror_bottom",
+      "x": 270
+    },
+    "facing=up,far=false,connection=left": {
+      "model": "mirror:block/mirror_left",
+      "x": 270
+    },
+    "facing=up,far=false,connection=right": {
+      "model": "mirror:block/mirror_right",
+      "x": 270
+    },
+    "facing=up,far=false,connection=top_left": {
+      "model": "mirror:block/mirror_top_left",
+      "x": 270
+    },
+    "facing=up,far=false,connection=top_right": {
+      "model": "mirror:block/mirror_top_right",
+      "x": 270
+    },
+    "facing=up,far=false,connection=bottom_left": {
+      "model": "mirror:block/mirror_bottom_left",
+      "x": 270
+    },
+    "facing=up,far=false,connection=bottom_right": {
+      "model": "mirror:block/mirror_bottom_right",
+      "x": 270
+    },
+    "facing=up,far=false,connection=h_left": {
+      "model": "mirror:block/mirror_h_left",
+      "x": 270
+    },
+    "facing=up,far=false,connection=h_right": {
+      "model": "mirror:block/mirror_h_right",
+      "x": 270
+    },
+    "facing=up,far=false,connection=h_middle": {
+      "model": "mirror:block/mirror_h_middle",
+      "x": 270
+    },
+    "facing=up,far=false,connection=v_top": {
+      "model": "mirror:block/mirror_v_top",
+      "x": 270
+    },
+    "facing=up,far=false,connection=v_bottom": {
+      "model": "mirror:block/mirror_v_bottom",
+      "x": 270
+    },
+    "facing=up,far=false,connection=v_middle": {
+      "model": "mirror:block/mirror_v_middle",
+      "x": 270
+    },
+    "facing=up,far=true,connection=single": {
+      "model": "mirror:block/mirror_far",
+      "x": 270
+    },
+    "facing=up,far=true,connection=center": {
+      "model": "mirror:block/mirror_far_center",
+      "x": 270
+    },
+    "facing=up,far=true,connection=top": {
+      "model": "mirror:block/mirror_far_top",
+      "x": 270
+    },
+    "facing=up,far=true,connection=bottom": {
+      "model": "mirror:block/mirror_far_bottom",
+      "x": 270
+    },
+    "facing=up,far=true,connection=left": {
+      "model": "mirror:block/mirror_far_left",
+      "x": 270
+    },
+    "facing=up,far=true,connection=right": {
+      "model": "mirror:block/mirror_far_right",
+      "x": 270
+    },
+    "facing=up,far=true,connection=top_left": {
+      "model": "mirror:block/mirror_far_top_left",
+      "x": 270
+    },
+    "facing=up,far=true,connection=top_right": {
+      "model": "mirror:block/mirror_far_top_right",
+      "x": 270
+    },
+    "facing=up,far=true,connection=bottom_left": {
+      "model": "mirror:block/mirror_far_bottom_left",
+      "x": 270
+    },
+    "facing=up,far=true,connection=bottom_right": {
+      "model": "mirror:block/mirror_far_bottom_right",
+      "x": 270
+    },
+    "facing=up,far=true,connection=h_left": {
+      "model": "mirror:block/mirror_far_h_left",
+      "x": 270
+    },
+    "facing=up,far=true,connection=h_right": {
+      "model": "mirror:block/mirror_far_h_right",
+      "x": 270
+    },
+    "facing=up,far=true,connection=h_middle": {
+      "model": "mirror:block/mirror_far_h_middle",
+      "x": 270
+    },
+    "facing=up,far=true,connection=v_top": {
+      "model": "mirror:block/mirror_far_v_top",
+      "x": 270
+    },
+    "facing=up,far=true,connection=v_bottom": {
+      "model": "mirror:block/mirror_far_v_bottom",
+      "x": 270
+    },
+    "facing=up,far=true,connection=v_middle": {
+      "model": "mirror:block/mirror_far_v_middle",
+      "x": 270
+    },
+    "facing=down,far=false,connection=single": {
+      "model": "mirror:block/mirror",
+      "x": 90
+    },
+    "facing=down,far=false,connection=center": {
+      "model": "mirror:block/mirror_center",
+      "x": 90
+    },
+    "facing=down,far=false,connection=top": {
+      "model": "mirror:block/mirror_top",
+      "x": 90
+    },
+    "facing=down,far=false,connection=bottom": {
+      "model": "mirror:block/mirror_bottom",
+      "x": 90
+    },
+    "facing=down,far=false,connection=left": {
+      "model": "mirror:block/mirror_left",
+      "x": 90
+    },
+    "facing=down,far=false,connection=right": {
+      "model": "mirror:block/mirror_right",
+      "x": 90
+    },
+    "facing=down,far=false,connection=top_left": {
+      "model": "mirror:block/mirror_top_left",
+      "x": 90
+    },
+    "facing=down,far=false,connection=top_right": {
+      "model": "mirror:block/mirror_top_right",
+      "x": 90
+    },
+    "facing=down,far=false,connection=bottom_left": {
+      "model": "mirror:block/mirror_bottom_left",
+      "x": 90
+    },
+    "facing=down,far=false,connection=bottom_right": {
+      "model": "mirror:block/mirror_bottom_right",
+      "x": 90
+    },
+    "facing=down,far=false,connection=h_left": {
+      "model": "mirror:block/mirror_h_left",
+      "x": 90
+    },
+    "facing=down,far=false,connection=h_right": {
+      "model": "mirror:block/mirror_h_right",
+      "x": 90
+    },
+    "facing=down,far=false,connection=h_middle": {
+      "model": "mirror:block/mirror_h_middle",
+      "x": 90
+    },
+    "facing=down,far=false,connection=v_top": {
+      "model": "mirror:block/mirror_v_top",
+      "x": 90
+    },
+    "facing=down,far=false,connection=v_bottom": {
+      "model": "mirror:block/mirror_v_bottom",
+      "x": 90
+    },
+    "facing=down,far=false,connection=v_middle": {
+      "model": "mirror:block/mirror_v_middle",
+      "x": 90
+    },
+    "facing=down,far=true,connection=single": {
+      "model": "mirror:block/mirror_far",
+      "x": 90
+    },
+    "facing=down,far=true,connection=center": {
+      "model": "mirror:block/mirror_far_center",
+      "x": 90
+    },
+    "facing=down,far=true,connection=top": {
+      "model": "mirror:block/mirror_far_top",
+      "x": 90
+    },
+    "facing=down,far=true,connection=bottom": {
+      "model": "mirror:block/mirror_far_bottom",
+      "x": 90
+    },
+    "facing=down,far=true,connection=left": {
+      "model": "mirror:block/mirror_far_left",
+      "x": 90
+    },
+    "facing=down,far=true,connection=right": {
+      "model": "mirror:block/mirror_far_right",
+      "x": 90
+    },
+    "facing=down,far=true,connection=top_left": {
+      "model": "mirror:block/mirror_far_top_left",
+      "x": 90
+    },
+    "facing=down,far=true,connection=top_right": {
+      "model": "mirror:block/mirror_far_top_right",
+      "x": 90
+    },
+    "facing=down,far=true,connection=bottom_left": {
+      "model": "mirror:block/mirror_far_bottom_left",
+      "x": 90
+    },
+    "facing=down,far=true,connection=bottom_right": {
+      "model": "mirror:block/mirror_far_bottom_right",
+      "x": 90
+    },
+    "facing=down,far=true,connection=h_left": {
+      "model": "mirror:block/mirror_far_h_left",
+      "x": 90
+    },
+    "facing=down,far=true,connection=h_right": {
+      "model": "mirror:block/mirror_far_h_right",
+      "x": 90
+    },
+    "facing=down,far=true,connection=h_middle": {
+      "model": "mirror:block/mirror_far_h_middle",
+      "x": 90
+    },
+    "facing=down,far=true,connection=v_top": {
+      "model": "mirror:block/mirror_far_v_top",
+      "x": 90
+    },
+    "facing=down,far=true,connection=v_bottom": {
+      "model": "mirror:block/mirror_far_v_bottom",
+      "x": 90
+    },
+    "facing=down,far=true,connection=v_middle": {
+      "model": "mirror:block/mirror_far_v_middle",
+      "x": 90
+    },
     "facing=north,far=false,connection=single": {
       "model": "mirror:block/mirror"
     },

@@ -4,7 +4,6 @@ import com.mirror.MirrorMod;
 import com.mirror.common.enderman.MirrorEndermanObservationController;
 import com.mirror.config.MirrorConfig;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.world.level.Level;
@@ -56,27 +55,17 @@ public final class MirrorBlockEntity extends BlockEntity {
     }
 
     public ScreenRect getScreenRect() {
-        Direction facing = getBlockState().getValue(MirrorBlock.FACING);
-        Vec3 normal = Vec3.atLowerCornerOf(facing.getNormal());
-        double recession = MirrorBlock.surfaceRecession(getBlockState());
-        Vec3 plane = Vec3.atCenterOf(worldPosition).add(normal.scale(0.5 - recession));
-        Vec3 center = plane
-                .add(ScreenRect.rightOf(normal).scale((1 - connectedWidth) * 0.5))
-                .add(new Vec3(0, 1, 0).scale((connectedHeight - 1) * 0.5));
-        return new ScreenRect(center, normal, connectedWidth, connectedHeight);
+        return ScreenRect.fromMaster(worldPosition, getBlockState().getValue(MirrorBlock.FACING),
+                connectedWidth, connectedHeight, MirrorBlock.surfaceRecession(getBlockState()));
     }
 
     @Override
     public AABB getRenderBoundingBox() {
         AABB box = new AABB(worldPosition);
-        Direction facing = getBlockState().getValue(MirrorBlock.FACING);
-        AABB connectedBounds = switch (facing) {
-            case NORTH -> box.expandTowards(-connectedWidth + 1, connectedHeight - 1, 0);
-            case SOUTH -> box.expandTowards(connectedWidth - 1, connectedHeight - 1, 0);
-            case EAST -> box.expandTowards(0, connectedHeight - 1, -connectedWidth + 1);
-            case WEST -> box.expandTowards(0, connectedHeight - 1, connectedWidth - 1);
-            default -> box;
-        };
+        MirrorOrientation orientation = MirrorOrientation.of(getBlockState().getValue(MirrorBlock.FACING));
+        Vec3 extent = orientation.right().scale(connectedWidth - 1)
+                .add(orientation.up().scale(connectedHeight - 1));
+        AABB connectedBounds = box.expandTowards(extent);
         return connectedBounds.inflate(1.0 / 16.0);
     }
 

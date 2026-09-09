@@ -4,7 +4,7 @@
   "item.mirror.crystalline": "晶珠",
   "mirror.config.maxConnectedSize": "最大连接尺寸",
   "mirror.config.squareAspectRatio": "仅允许方形比例",
-  "mirror.config.placementMode": "放置模式",
+  "mirror.config.placementMode": "镜片放置位置",
   "mirror.config.enableObservation": "启用末影人观察",
   "mirror.config.renderDistance": "反射渲染距离",
   "mirror.config.resolutionScale": "分辨率倍率",

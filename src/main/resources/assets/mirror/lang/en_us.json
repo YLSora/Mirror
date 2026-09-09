@@ -4,7 +4,7 @@
   "item.mirror.crystalline": "Crystalline",
   "mirror.config.maxConnectedSize": "Max Connected Size",
   "mirror.config.squareAspectRatio": "Square Aspect Ratio",
-  "mirror.config.placementMode": "Placement Mode",
+  "mirror.config.placementMode": "Mirror Placement Position",
   "mirror.config.enableObservation": "Enable Enderman Observation",
   "mirror.config.renderDistance": "Render Distance",
   "mirror.config.resolutionScale": "Resolution Scale",

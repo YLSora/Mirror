@@ -1,6 +1,7 @@
 package com.mirror.client;
 
 import com.mirror.common.MirrorBlockEntity;
+import com.mirror.common.ScreenRect;
 import com.mirror.config.MirrorConfig;
 import com.mirror.mixin.GameRendererAccess;
 import com.mirror.mixin.MinecraftAccess;
@@ -14,7 +15,6 @@ import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.PostChain;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
-import net.minecraft.core.Direction;
 import net.minecraft.world.entity.Display;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.Level;
@@ -99,24 +99,9 @@ public final class MirrorLevelRenderer {
         mainBobEyeOffset = Vec3.ZERO;
     }
 
-    public static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
-                              RenderTarget target, float partialTick) {
-        Direction facing = mirror.getBlockState().getValue(com.mirror.common.MirrorBlock.FACING);
-        render(level, mirror, reflection, target, partialTick, null, facing.toYRot(), 0.0f, 0, List.of(),
-                List.of(), new MirrorLevelRendererHooks.TextureState(), Long.MIN_VALUE, new MirrorViewHistory());
-    }
-
-    public static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
-                              RenderTarget target, float partialTick, MirrorProjection.ViewportProjection customProjection,
-                              float yaw, float pitch, int recursionDepth, List<UUID> parentChain) {
-        render(level, mirror, reflection, target, partialTick, customProjection, yaw, pitch,
-                recursionDepth, parentChain, List.of(), new MirrorLevelRendererHooks.TextureState(),
-                Long.MIN_VALUE, new MirrorViewHistory());
-    }
-
     static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
                        RenderTarget target, float partialTick, MirrorProjection.ViewportProjection customProjection,
-                       float yaw, float pitch, int recursionDepth, List<UUID> parentChain,
+                       int recursionDepth, List<UUID> parentChain,
                        List<ReflectionPlane> parentReflectionPath,
                        MirrorLevelRendererHooks.TextureState textureState,
                        long viewId, MirrorViewHistory viewHistory) {
@@ -129,22 +114,16 @@ public final class MirrorLevelRenderer {
         float oldRenderDistance = gameRenderer.getRenderDistance();
         Vec3 reflectedEye = reflection.reflectedEye();
         Vec3 playerEye = gameRenderer.getMainCamera().getPosition();
-        Direction mirrorFacing = mirror.getBlockState().getValue(com.mirror.common.MirrorBlock.FACING);
-        Vec3 mirrorNormal = Vec3.atLowerCornerOf(mirrorFacing.getNormal());
-        Vec3 up = new Vec3(0, 1, 0);
-        Vec3 right = mirrorNormal.cross(up).normalize();
-        double recession = com.mirror.common.MirrorBlock.surfaceRecession(mirror.getBlockState());
-        Vec3 mirrorPlanePoint = Vec3.atCenterOf(mirror.getBlockPos()).add(mirrorNormal.scale(
-                0.5 - recession));
+        ScreenRect screen = mirror.getScreenRect();
+        Vec3 mirrorNormal = screen.normal();
+        Vec3 mirrorPlanePoint = screen.center();
+        float yaw = screen.orientation().yaw();
+        float pitch = screen.orientation().pitch();
         // A mirror camera is virtual and can move outside Embeddium's physical SectionTree after
         // several reflections. Seed section traversal immediately in front of the physical mirror
         // instead of at that virtual eye; the reflected frustum still performs the actual visibility
         // test once traversal reaches geometry inside the aperture.
-        Vec3 cullingOrigin = Vec3.atCenterOf(mirror.getBlockPos())
-                .add(mirrorNormal.scale(0.5 - recession))
-                .add(right.scale((1.0 - mirror.getConnectedWidth()) * 0.5))
-                .add(up.scale((mirror.getConnectedHeight() - 1.0) * 0.5))
-                .add(mirrorNormal);
+        Vec3 cullingOrigin = screen.center().add(mirrorNormal);
         // The reflected camera recedes from the player at deeper recursion levels (a mirror tunnel
         // moves the eye by the mirror separation each reflection). Anchor the render/search distance
         // to the player's loaded chunk range instead of decaying it toward zero, otherwise the deep

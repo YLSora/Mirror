@@ -1,7 +1,7 @@
 package com.mirror.client;
 
-import com.mirror.common.MirrorBlock;
 import com.mirror.common.MirrorBlockEntity;
+import com.mirror.common.ScreenRect;
 import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
@@ -13,7 +13,6 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.client.renderer.texture.AbstractTexture;
-import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
@@ -99,36 +98,13 @@ public final class MirrorReflectionTexture implements AutoCloseable {
     public void render(Level level, MirrorBlockEntity mirror, Vec3 eye, float partialTick,
                        List<MirrorLevelRenderer.ReflectionPlane> parentPath) {
         if (mirror.isRemoved() || level != Minecraft.getInstance().level) return;
-        Direction facing = mirror.getBlockState().getValue(MirrorBlock.FACING);
-        Vec3 normal = Vec3.atLowerCornerOf(facing.getNormal());
-        Vec3 up = new Vec3(0, 1, 0);
-        Vec3 right = normal.cross(up).normalize();
-
-        double frame = MirrorBlockEntity.FRAME_PIXELS / 16.0;
-        double halfWidth = (mirror.getConnectedWidth() - frame) * 0.5;
-        double halfHeight = (mirror.getConnectedHeight() - frame) * 0.5;
-        Vec3 masterPlane = Vec3.atCenterOf(mirror.getBlockPos())
-                .add(normal.scale(0.5 - MirrorBlock.surfaceRecession(mirror.getBlockState())));
-        Vec3 center = masterPlane
-                .add(right.scale((1.0 - mirror.getConnectedWidth()) * 0.5))
-                .add(up.scale((mirror.getConnectedHeight() - 1.0) * 0.5));
-        MirrorReflection groupReflection = MirrorReflection.compute(center, normal, eye);
-        double depth = groupReflection.signedDistance();
-        if (!groupReflection.viewerInFront() || depth <= 0.0) {
+        ScreenRect screen = mirror.getScreenRect();
+        MirrorReflection groupReflection = MirrorReflection.compute(screen.center(), screen.normal(), eye);
+        if (!groupReflection.viewerInFront()) {
             return;
         }
-
-        float near = Math.max(0.05f, (float) depth);
-        float scale = near / (float) depth;
-        Vec3 bottomLeft = center.subtract(right.scale(halfWidth)).subtract(up.scale(halfHeight));
-        Vec3 bottomRight = center.add(right.scale(halfWidth)).subtract(up.scale(halfHeight));
-        Vec3 topLeft = center.subtract(right.scale(halfWidth)).add(up.scale(halfHeight));
-        Vec3 reflectedEye = groupReflection.reflectedEye();
-        float left = (float) bottomLeft.subtract(reflectedEye).dot(right) * scale;
-        float rightPlane = (float) bottomRight.subtract(reflectedEye).dot(right) * scale;
-        float bottom = (float) bottomLeft.subtract(reflectedEye).dot(up) * scale;
-        float top = (float) topLeft.subtract(reflectedEye).dot(up) * scale;
-        MirrorProjection projection = new MirrorProjection(left, rightPlane, bottom, top, near);
+        MirrorProjection projection = MirrorProjection.forMirror(screen, groupReflection,
+                MirrorBlockEntity.FRAME_PIXELS / 32.0);
 
         MirrorCapturePool.CaptureSlot capture = MirrorCapturePool.acquire(
                 recursionDepth, surfaceTarget.width, surfaceTarget.height);
@@ -140,7 +116,7 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         long renderStart = System.nanoTime();
         try {
             MirrorLevelRenderer.render(level, mirror, groupReflection, capture.target(), partialTick,
-                    captureProjection, facing.toYRot(), 0.0f, recursionDepth, parentChain, parentPath,
+                    captureProjection, recursionDepth, parentChain, parentPath,
                     cullingState, viewId, viewHistory);
         } catch (MirrorPipelineUnavailableException unavailable) {
             // A shader pack that Oculus cannot compile for a secondary pipeline must not take the

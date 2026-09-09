@@ -2,6 +2,8 @@ package com.mirror.common;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.level.block.Mirror;
+import net.minecraft.world.level.block.Rotation;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
@@ -50,18 +52,11 @@ class MirrorGridTest {
 
     @Test
     void bottomLeftIsTheOnlyOwnerForAllFacingDirections() {
-        for (Direction facing : new Direction[]{Direction.NORTH, Direction.EAST,
-                Direction.SOUTH, Direction.WEST}) {
-            assertTrue(ConnectionType.SINGLE.isMaster(facing));
-            assertTrue(ConnectionType.V_BOTTOM.isMaster(facing),
-                    "1xN master: " + facing);
-            assertTrue(ConnectionType.H_LEFT.isMaster(facing),
-                    "Nx1 master: " + facing);
-            assertTrue(ConnectionType.BOTTOM_LEFT.isMaster(facing),
-                    "2x2 master: " + facing);
-            assertFalse(ConnectionType.TOP_RIGHT.isMaster(facing),
-                    "non-master: " + facing);
-        }
+        assertTrue(ConnectionType.SINGLE.isMaster());
+        assertTrue(ConnectionType.V_BOTTOM.isMaster());
+        assertTrue(ConnectionType.H_LEFT.isMaster());
+        assertTrue(ConnectionType.BOTTOM_LEFT.isMaster());
+        assertFalse(ConnectionType.TOP_RIGHT.isMaster());
     }
 
     @Test
@@ -72,6 +67,35 @@ class MirrorGridTest {
             assertEquals(origin.relative(facing.getCounterClockWise()),
                     MirrorGrid.toWorld(origin, facing, 1, 0));
             assertEquals(origin.above(), MirrorGrid.toWorld(origin, facing, 0, 1));
+        }
+    }
+
+    @Test
+    void horizontalMirrorsUseTheXZPlane() {
+        BlockPos origin = new BlockPos(10, 20, 30);
+        assertEquals(new BlockPos(8, 20, 33), MirrorGrid.toWorld(origin, Direction.UP, 2, 3));
+        assertEquals(new BlockPos(8, 20, 27), MirrorGrid.toWorld(origin, Direction.DOWN, 2, 3));
+    }
+
+    @Test
+    void rotatedConnectionsFollowTheirWorldNeighbors() {
+        for (Direction facing : Direction.values()) {
+            for (ConnectionType connection : ConnectionType.values()) {
+                for (Rotation rotation : Rotation.values()) {
+                    ConnectionType rotated = connection.transform(facing, rotation::rotate);
+                    for (Direction side : Direction.values()) {
+                        assertEquals(connection.isConnected(side, facing),
+                                rotated.isConnected(rotation.rotate(side), rotation.rotate(facing)));
+                    }
+                }
+                for (Mirror mirror : Mirror.values()) {
+                    ConnectionType mirrored = connection.transform(facing, mirror::mirror);
+                    for (Direction side : Direction.values()) {
+                        assertEquals(connection.isConnected(side, facing),
+                                mirrored.isConnected(mirror.mirror(side), mirror.mirror(facing)));
+                    }
+                }
+            }
         }
     }
 

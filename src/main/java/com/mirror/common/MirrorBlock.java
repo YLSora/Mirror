@@ -6,14 +6,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.entity.LivingEntity;
-import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
-import net.minecraft.world.level.block.HorizontalDirectionalBlock;
+import net.minecraft.world.level.block.DirectionalBlock;
 import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTicker;
@@ -30,7 +29,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.EnumMap;
 import java.util.Map;
 
-public final class MirrorBlock extends HorizontalDirectionalBlock implements EntityBlock {
+public final class MirrorBlock extends DirectionalBlock implements EntityBlock {
     public static final EnumProperty<ConnectionType> CONNECTION = ConnectionType.PROPERTY;
     public static final BooleanProperty FAR = BooleanProperty.create("far");
     public static final double FAR_RECESSION = 14.0 / 16.0;
@@ -52,6 +51,8 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
         shapes.put(Direction.EAST, Block.box(16 - far, 0, 0, 16 - near, 16, 16));
         shapes.put(Direction.SOUTH, Block.box(0, 0, 16 - far, 16, 16, 16 - near));
         shapes.put(Direction.WEST, Block.box(near, 0, 0, far, 16, 16));
+        shapes.put(Direction.UP, Block.box(0, 16 - far, 0, 16, 16 - near, 16));
+        shapes.put(Direction.DOWN, Block.box(0, near, 0, 16, far, 16));
         return shapes;
     }
 
@@ -72,10 +73,7 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
     @Nullable
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
-        Direction facing = context.getHorizontalDirection().getOpposite();
-        BlockState state = defaultBlockState()
-                .setValue(FACING, facing)
-                .setValue(FAR, shouldPlaceFar(context, facing));
+        BlockState state = placementState(context);
         // Seed the state from the already placed neighbours. setPlacedBy still performs the
         // complete rectangular rebuild, but doing this here keeps the new cell's model correct
         // even before the server sends the final group states back to the client.
@@ -83,13 +81,33 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
                 context.getClickedPos(), state));
     }
 
+    private BlockState placementState(BlockPlaceContext context) {
+        Direction clickedFace = context.getClickedFace();
+        if (!context.isSecondaryUseActive() && !context.replacingClickedOnBlock()) {
+            // BlockPlaceContext exposes the destination, so step back to the actual hit block.
+            BlockPos clickedPos = context.getClickedPos().relative(clickedFace.getOpposite());
+            BlockState clickedState = context.getLevel().getBlockState(clickedPos);
+            if (clickedState.is(this) && clickedFace.getAxis() != clickedState.getValue(FACING).getAxis()) {
+                return defaultBlockState()
+                        .setValue(FACING, clickedState.getValue(FACING))
+                        .setValue(FAR, clickedState.getValue(FAR));
+            }
+        }
+
+        Direction facing = context.isSecondaryUseActive()
+                ? context.getNearestLookingDirection().getOpposite() : context.getHorizontalDirection().getOpposite();
+        return defaultBlockState()
+                .setValue(FACING, facing)
+                .setValue(FAR, shouldPlaceFar(context, facing));
+    }
+
     private ConnectionType connectionTypeFromNeighbors(Level level, BlockPos pos, BlockState state) {
         if (maxConnectedSize() <= 1) return ConnectionType.SINGLE;
-        Direction facing = state.getValue(FACING);
-        boolean up = isConnectedNeighbor(level, pos, state, Direction.UP);
-        boolean down = isConnectedNeighbor(level, pos, state, Direction.DOWN);
-        boolean left = isConnectedNeighbor(level, pos, state, facing.getClockWise());
-        boolean right = isConnectedNeighbor(level, pos, state, facing.getCounterClockWise());
+        MirrorOrientation orientation = MirrorOrientation.of(state.getValue(FACING));
+        boolean up = isConnectedNeighbor(level, pos, state, orientation.direction(ConnectionType.LocalSide.UP));
+        boolean down = isConnectedNeighbor(level, pos, state, orientation.direction(ConnectionType.LocalSide.DOWN));
+        boolean left = isConnectedNeighbor(level, pos, state, orientation.direction(ConnectionType.LocalSide.LEFT));
+        boolean right = isConnectedNeighbor(level, pos, state, orientation.direction(ConnectionType.LocalSide.RIGHT));
         return ConnectionType.fromConnections(up, down, left, right);
     }
 
@@ -110,21 +128,21 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
     private static boolean isFarHalf(BlockPlaceContext context, Direction facing) {
         Vec3 hit = context.getClickLocation();
         BlockPos pos = context.getClickedPos();
-        double fraction = facing.getAxis() == Direction.Axis.X
-                ? hit.x - pos.getX()
-                : hit.z - pos.getZ();
-        double towardViewer = (fraction - 0.5) * facing.getAxisDirection().getStep();
-        return towardViewer < 0;
+        return hit.subtract(Vec3.atCenterOf(pos)).dot(MirrorOrientation.of(facing).normal()) < 0;
     }
 
     @Override
     public BlockState rotate(BlockState state, Rotation rotation) {
-        return state.setValue(FACING, rotation.rotate(state.getValue(FACING)));
+        Direction facing = state.getValue(FACING);
+        return state.setValue(FACING, rotation.rotate(facing))
+                .setValue(CONNECTION, state.getValue(CONNECTION).transform(facing, rotation::rotate));
     }
 
     @Override
     public BlockState mirror(BlockState state, net.minecraft.world.level.block.Mirror mirror) {
-        return state.rotate(mirror.getRotation(state.getValue(FACING)));
+        Direction facing = state.getValue(FACING);
+        return state.setValue(FACING, mirror.mirror(facing))
+                .setValue(CONNECTION, state.getValue(CONNECTION).transform(facing, mirror::mirror));
     }
 
     @Override
@@ -150,9 +168,7 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
     public void setPlacedBy(Level level, BlockPos pos, BlockState state, @Nullable LivingEntity placer,
                             ItemStack stack) {
         super.setPlacedBy(level, pos, state, placer, stack);
-        if (!(placer instanceof Player player) || !player.isSecondaryUseActive()) {
-            MirrorGrid.rebuildAround(level, pos);
-        }
+        MirrorGrid.rebuildAround(level, pos);
     }
 
     @Override
@@ -212,15 +228,18 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
         if (!(level.getBlockState(pos).getBlock() instanceof MirrorBlock mirror)) return null;
         BlockState reference = level.getBlockState(pos);
         Direction facing = reference.getValue(FACING);
+        MirrorOrientation orientation = MirrorOrientation.of(facing);
+        Direction down = orientation.direction(ConnectionType.LocalSide.DOWN);
+        Direction left = orientation.direction(ConnectionType.LocalSide.LEFT);
         BlockPos current = pos;
         while (isSameCell(level.getBlockState(current), mirror, reference)
-                && level.getBlockState(current).getValue(CONNECTION).isConnected(Direction.DOWN, facing)) {
-            current = current.below();
+                && level.getBlockState(current).getValue(CONNECTION).isConnected(down, facing)) {
+            current = current.relative(down);
         }
         while (isSameCell(level.getBlockState(current), mirror, reference)
                 && level.getBlockState(current).getValue(CONNECTION)
-                .isConnected(facing.getClockWise(), facing)) {
-            current = current.relative(facing.getClockWise());
+                .isConnected(left, facing)) {
+            current = current.relative(left);
         }
         return isSameCell(level.getBlockState(current), mirror, reference)
                 && isMasterState(level.getBlockState(current)) ? current : null;
@@ -228,11 +247,7 @@ public final class MirrorBlock extends HorizontalDirectionalBlock implements Ent
 
     public static boolean isMasterState(BlockState state) {
         if (!(state.getBlock() instanceof MirrorBlock)) return false;
-        return isMasterConnection(state.getValue(FACING), state.getValue(CONNECTION));
-    }
-
-    public static boolean isMasterConnection(Direction facing, ConnectionType connection) {
-        return connection.isMaster(facing);
+        return state.getValue(CONNECTION).isMaster();
     }
 
     private static boolean isSameCell(BlockState state, MirrorBlock mirror, BlockState reference) {

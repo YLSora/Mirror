@@ -2,6 +2,8 @@ package com.mirror.client;
 
 import com.mirror.common.MirrorBlock;
 import com.mirror.common.MirrorBlockEntity;
+import com.mirror.common.MirrorOrientation;
+import com.mirror.common.ScreenRect;
 import com.mirror.config.MirrorConfig;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
@@ -12,7 +14,6 @@ import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
-import net.minecraft.core.Direction;
 import net.minecraft.world.phys.Vec3;
 
 public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<MirrorBlockEntity> {
@@ -62,16 +63,14 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
                 && MirrorConfig.CLIENT.recursionMode.get() == MirrorConfig.RecursionMode.SHARED
                 && MirrorLevelRenderer.isParentMirror(master.getId())) return;
 
-        Direction facing = entity.getBlockState().getValue(MirrorBlock.FACING);
-        Vec3 normal = Vec3.atLowerCornerOf(facing.getNormal());
+        ScreenRect screen = entity.getScreenRect();
         double recession = MirrorBlock.surfaceRecession(entity.getBlockState());
-        Vec3 planePoint = Vec3.atCenterOf(entity.getBlockPos()).add(normal.scale(0.5 - recession));
         Camera camera = renderingReflection ? MirrorLevelRenderer.getActiveCamera()
                 : Minecraft.getInstance().gameRenderer.getMainCamera();
         if (camera == null) return;
         Vec3 eye = camera.getPosition();
         if (!renderingReflection) eye = eye.add(MirrorLevelRenderer.getMainBobEyeOffset());
-        MirrorReflection reflection = MirrorReflection.compute(planePoint, normal, eye);
+        MirrorReflection reflection = MirrorReflection.compute(screen.center(), screen.normal(), eye);
         if (!reflection.viewerInFront()) {
             if (renderingReflection) {
                 MirrorDiagnostics.recordFacingRejected(MirrorLevelRenderer.getChildDepth());
@@ -85,17 +84,18 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
                 ? MirrorTextureManager.requestShared(entity)
                 : MirrorTextureManager.requestRecursive(entity);
         if (texture == null) return;
-        drawFace(entity, facing, recession, poseStack, buffer, texture.textureLocation(),
+        drawFace(entity, screen.orientation(), recession, poseStack, buffer, texture.textureLocation(),
                 OculusCompat.shouldDeferSurfacePresentation()
                         || FlashlightCompat.shouldDeferSurfacePresentation());
     }
 
-    private static void drawFace(MirrorBlockEntity entity, Direction facing, double recession,
+    private static void drawFace(MirrorBlockEntity entity, MirrorOrientation orientation, double recession,
                                  PoseStack poseStack, MultiBufferSource buffer,
                                  net.minecraft.resources.ResourceLocation texture, boolean defer) {
         poseStack.pushPose();
         poseStack.translate(0.5, 0.5, 0.5);
-        poseStack.mulPose(Axis.YP.rotationDegrees(180.0f - facing.toYRot()));
+        poseStack.mulPose(Axis.YP.rotationDegrees(180.0f - orientation.yaw()));
+        poseStack.mulPose(Axis.XP.rotationDegrees(-orientation.pitch()));
         poseStack.translate(0.0, 0.0, -0.5 + recession - 0.001);
 
         float width = entity.getConnectedWidth();

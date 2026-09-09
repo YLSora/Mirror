@@ -6,6 +6,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.gametest.GameTestHolder;
 
 /** In-world ownership tests; run with the Forge gameTestServer task. */
@@ -34,6 +35,93 @@ public final class MirrorGridGameTests {
     @GameTest(template = "empty", templateNamespace = "minecraft")
     public static void westTwoByTwoHasOneOwner(GameTestHelper helper) {
         verifyTwoByTwo(helper, Direction.WEST, false);
+    }
+
+    @GameTest(template = "empty", templateNamespace = "minecraft")
+    public static void floorTwoByTwoHasOneOwner(GameTestHelper helper) {
+        verifyTwoByTwo(helper, Direction.UP, false);
+    }
+
+    @GameTest(template = "empty", templateNamespace = "minecraft")
+    public static void ceilingTwoByTwoHasOneOwner(GameTestHelper helper) {
+        verifyTwoByTwo(helper, Direction.DOWN, false);
+    }
+
+    @GameTest(template = "empty", templateNamespace = "minecraft")
+    public static void farFloorTwoByTwoHasOneOwner(GameTestHelper helper) {
+        verifyTwoByTwo(helper, Direction.UP, true);
+    }
+
+    @GameTest(template = "empty", templateNamespace = "minecraft")
+    public static void farCeilingTwoByTwoHasOneOwner(GameTestHelper helper) {
+        verifyTwoByTwo(helper, Direction.DOWN, true);
+    }
+
+    @GameTest(template = "empty", templateNamespace = "minecraft")
+    public static void floorRectanglePromotesOwnerAfterRemoval(GameTestHelper helper) {
+        verifyHorizontalRectangleRemoval(helper, Direction.UP);
+    }
+
+    @GameTest(template = "empty", templateNamespace = "minecraft")
+    public static void ceilingRectanglePromotesOwnerAfterRemoval(GameTestHelper helper) {
+        verifyHorizontalRectangleRemoval(helper, Direction.DOWN);
+    }
+
+    @GameTest(template = "empty", templateNamespace = "minecraft")
+    public static void horizontalGroupsRejectDifferentDepthFacingAndPlane(GameTestHelper helper) {
+        BlockState state = MirrorMod.MIRROR.get().defaultBlockState().setValue(MirrorBlock.FACING, Direction.UP);
+        BlockPos origin = new BlockPos(2, 2, 2);
+        helper.setBlock(origin, state);
+        helper.setBlock(origin.west(), state.setValue(MirrorBlock.FAR, true));
+        helper.setBlock(origin.south(), state.setValue(MirrorBlock.FACING, Direction.DOWN));
+        helper.setBlock(origin.above(), state);
+        helper.runAtTickTime(4, () -> {
+            for (BlockPos pos : new BlockPos[]{origin, origin.west(), origin.south(), origin.above()}) {
+                helper.assertBlockProperty(pos, MirrorBlock.CONNECTION, ConnectionType.SINGLE);
+                helper.assertTrue(helper.getBlockEntity(pos) instanceof MirrorBlockEntity,
+                        "each separate plane must retain its own block entity");
+            }
+            helper.succeed();
+        });
+    }
+
+    private static void verifyHorizontalRectangleRemoval(GameTestHelper helper, Direction facing) {
+        BlockPos origin = new BlockPos(3, 2, 2);
+        BlockState state = MirrorMod.MIRROR.get().defaultBlockState().setValue(MirrorBlock.FACING, facing);
+        for (int x = 0; x < 3; x++) {
+            for (int y = 0; y < 2; y++) helper.setBlock(MirrorGrid.toWorld(origin, facing, x, y), state);
+        }
+        helper.runAtTickTime(4, () -> {
+            verifyRectangle(helper, origin, facing, 3, 2);
+            java.util.UUID ownerId = ((MirrorBlockEntity) helper.getBlockEntity(origin)).getId();
+            helper.destroyBlock(origin);
+            helper.destroyBlock(MirrorGrid.toWorld(origin, facing, 0, 1));
+            helper.runAfterDelay(2, () -> {
+                BlockPos newOwner = MirrorGrid.toWorld(origin, facing, 1, 0);
+                verifyRectangle(helper, newOwner, facing, 2, 2);
+                helper.assertTrue(((MirrorBlockEntity) helper.getBlockEntity(newOwner)).getId().equals(ownerId),
+                        "the surviving horizontal group must retain its reflection identity");
+                helper.succeed();
+            });
+        });
+    }
+
+    private static void verifyRectangle(GameTestHelper helper, BlockPos origin, Direction facing,
+                                        int width, int height) {
+        MirrorBlockEntity owner = (MirrorBlockEntity) helper.getBlockEntity(origin);
+        helper.assertTrue(owner != null && owner.getConnectedWidth() == width && owner.getConnectedHeight() == height,
+                "the owner must describe the complete rectangle");
+        for (int x = 0; x < width; x++) {
+            for (int y = 0; y < height; y++) {
+                BlockPos pos = MirrorGrid.toWorld(origin, facing, x, y);
+                helper.assertTrue((helper.getBlockEntity(pos) != null) == (x == 0 && y == 0),
+                        "only the local bottom-left cell may own a block entity");
+                helper.assertTrue(MirrorBlock.getMasterBlockEntity(helper.getLevel(), helper.absolutePos(pos)) == owner,
+                        "every connected cell must resolve to the same owner");
+                helper.assertTrue(owner.getRenderBoundingBox().contains(Vec3.atCenterOf(helper.absolutePos(pos))),
+                        "render bounds must contain every connected cell");
+            }
+        }
     }
 
     @GameTest(template = "empty", templateNamespace = "minecraft")
@@ -119,14 +207,15 @@ public final class MirrorGridGameTests {
         BlockState state = mirror.defaultBlockState()
                 .setValue(MirrorBlock.FACING, facing)
                 .setValue(MirrorBlock.FAR, far);
-        BlockPos localRight = ORIGIN.relative(facing.getCounterClockWise());
-        BlockPos upper = ORIGIN.above();
-        BlockPos upperRight = localRight.above();
+        BlockPos localRight = MirrorGrid.toWorld(ORIGIN, facing, 1, 0);
+        BlockPos upper = MirrorGrid.toWorld(ORIGIN, facing, 0, 1);
+        BlockPos upperRight = MirrorGrid.toWorld(ORIGIN, facing, 1, 1);
         helper.setBlock(ORIGIN, state);
         helper.setBlock(localRight, state);
         helper.setBlock(upper, state);
         helper.setBlock(upperRight, state);
         helper.runAtTickTime(4, () -> {
+            verifyRectangle(helper, ORIGIN, facing, 2, 2);
             helper.assertBlockProperty(ORIGIN, MirrorBlock.CONNECTION, ConnectionType.BOTTOM_LEFT);
             helper.assertBlockProperty(localRight, MirrorBlock.CONNECTION, ConnectionType.BOTTOM_RIGHT);
             helper.assertBlockProperty(upper, MirrorBlock.CONNECTION, ConnectionType.TOP_LEFT);

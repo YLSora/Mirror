@@ -42,6 +42,7 @@ minecraft {
         }
 
         gameTestServer {
+            workingDirectory project.file('build/gametest')
             args '--nogui'
         }
     }
@@ -96,7 +97,7 @@ tasks.configureEach {
         doLast {
             copy {
                 from(layout.projectDirectory.dir('src/main/resources/gameteststructures'))
-                into(layout.projectDirectory.dir('run/gameteststructures'))
+                into(layout.buildDirectory.dir('gametest/gameteststructures'))
             }
         }
     }

@@ -5,6 +5,7 @@ import net.minecraft.util.StringRepresentable;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
 
 import java.util.Locale;
+import java.util.function.UnaryOperator;
 
 public enum ConnectionType implements StringRepresentable {
     SINGLE(0),
@@ -75,20 +76,34 @@ public enum ConnectionType implements StringRepresentable {
     }
 
     public boolean isConnected(Direction worldSide, Direction facing) {
-        if (worldSide == Direction.UP) return isConnected(LocalSide.UP);
-        if (worldSide == Direction.DOWN) return isConnected(LocalSide.DOWN);
-        if (worldSide == facing.getClockWise()) return isConnected(LocalSide.LEFT);
-        if (worldSide == facing.getCounterClockWise()) return isConnected(LocalSide.RIGHT);
+        MirrorOrientation orientation = MirrorOrientation.of(facing);
+        for (LocalSide side : LocalSide.values()) {
+            if (worldSide == orientation.direction(side)) return isConnected(side);
+        }
         return false;
+    }
+
+    public ConnectionType transform(Direction facing, UnaryOperator<Direction> transform) {
+        MirrorOrientation orientation = MirrorOrientation.of(transform.apply(facing));
+        boolean up = false, down = false, left = false, right = false;
+        MirrorOrientation original = MirrorOrientation.of(facing);
+        for (LocalSide side : LocalSide.values()) {
+            if (!isConnected(side)) continue;
+            Direction transformed = transform.apply(original.direction(side));
+            up |= transformed == orientation.direction(LocalSide.UP);
+            down |= transformed == orientation.direction(LocalSide.DOWN);
+            left |= transformed == orientation.direction(LocalSide.LEFT);
+            right |= transformed == orientation.direction(LocalSide.RIGHT);
+        }
+        return fromConnections(up, down, left, right);
     }
 
     public boolean isSingle() {
         return this == SINGLE;
     }
 
-    public boolean isMaster(Direction facing) {
-        return !isConnected(Direction.DOWN, facing)
-                && !isConnected(facing.getClockWise(), facing);
+    public boolean isMaster() {
+        return !isConnected(LocalSide.DOWN) && !isConnected(LocalSide.LEFT);
     }
 
     @Override

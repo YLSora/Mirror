@@ -1,5 +1,7 @@
 package com.mirror.client;
 
+import com.mirror.common.ScreenRect;
+import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
 /**
@@ -12,6 +14,23 @@ import org.joml.Matrix4f;
  * aperture. The exact reflected rays are recovered by sampling only the returned UV crop.</p>
  */
 public record MirrorProjection(float left, float right, float bottom, float top, float nearPlane) {
+    /** Aperture in the reflected camera's axes; its horizontal axis opposes the screen's. */
+    public static MirrorProjection forMirror(ScreenRect screen, MirrorReflection reflection, double inset) {
+        double depth = reflection.signedDistance();
+        if (depth <= 0.0) throw new IllegalArgumentException("viewer must be in front of the mirror");
+        Vec3 cameraRight = screen.right().scale(-1);
+        Vec3 relativeCenter = screen.center().subtract(reflection.reflectedEye());
+        double x = relativeCenter.dot(cameraRight);
+        double y = relativeCenter.dot(screen.up());
+        double halfWidth = screen.width() * 0.5 - inset;
+        double halfHeight = screen.height() * 0.5 - inset;
+        float near = Math.max(0.05f, (float) depth);
+        double scale = near / depth;
+        return new MirrorProjection((float) ((x - halfWidth) * scale),
+                (float) ((x + halfWidth) * scale), (float) ((y - halfHeight) * scale),
+                (float) ((y + halfHeight) * scale), near);
+    }
+
     public MirrorProjection {
         if (!Float.isFinite(left) || !Float.isFinite(right)
                 || !Float.isFinite(bottom) || !Float.isFinite(top)

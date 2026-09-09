@@ -45,7 +45,10 @@ public final class MirrorConfig {
             builder.pop();
 
             builder.push("placement");
-            placementMode = builder.comment("NEAR 始终使用前表面，FAR 使用凹陷表面，BOTH 使用被点击的那一半。")
+            placementMode = builder.comment(
+                            "镜片位置：NEAR 靠镜面朝向的一侧，FAR 靠相反一侧，BOTH 使用被点击的那一半。",
+                            "潜行放置按玩家视线选择六向朝向；水平镜子在 BOTH 模式下按点击高度选择上下位置。",
+                            "非潜行点击镜子薄边时继承原镜子的朝向和位置。")
                     .translation("mirror.config.placementMode")
                     .defineEnum("placementMode", PlacementMode.BOTH);
             builder.pop();

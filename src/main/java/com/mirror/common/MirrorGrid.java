@@ -46,11 +46,12 @@ public final class MirrorGrid {
         if (level.isClientSide || REBUILDING.get()) return;
         if (!(reference.getBlock() instanceof MirrorBlock mirror)) return;
 
-        Direction facing = reference.getValue(MirrorBlock.FACING);
+        MirrorOrientation orientation = MirrorOrientation.of(reference.getValue(MirrorBlock.FACING));
         Set<BlockPos> visited = new HashSet<>();
         boolean identityTransferred = false;
-        for (Direction direction : new Direction[]{Direction.DOWN, facing.getClockWise(),
-                facing.getCounterClockWise(), Direction.UP}) {
+        for (ConnectionType.LocalSide side : new ConnectionType.LocalSide[]{ConnectionType.LocalSide.DOWN,
+                ConnectionType.LocalSide.LEFT, ConnectionType.LocalSide.RIGHT, ConnectionType.LocalSide.UP}) {
+            Direction direction = orientation.direction(side);
             BlockPos seed = removedPos.relative(direction);
             if (visited.contains(seed) || !mirror.connectionMatches(reference, level.getBlockState(seed))) {
                 continue;
@@ -145,18 +146,18 @@ public final class MirrorGrid {
     private static Set<Cell> collectComponent(Level level, BlockPos seed, MirrorBlock mirror, int max) {
         Set<Cell> result = new HashSet<>();
         ArrayDeque<Cell> pending = new ArrayDeque<>();
-        Direction facing = mirror.getStateFacing(level, seed);
+        MirrorOrientation orientation = MirrorOrientation.of(mirror.getStateFacing(level, seed));
         pending.add(new Cell(seed, 0, 0));
         while (!pending.isEmpty() && result.size() < max * max) {
             Cell cell = pending.removeFirst();
             BlockState state = level.getBlockState(cell.pos());
             if (!mirror.connectionMatches(level.getBlockState(seed), state)) continue;
             if (!result.add(cell)) continue;
-            for (Direction direction : new Direction[]{Direction.UP, Direction.DOWN,
-                    facing.getClockWise(), facing.getCounterClockWise()}) {
+            for (ConnectionType.LocalSide side : ConnectionType.LocalSide.values()) {
+                Direction direction = orientation.direction(side);
                 BlockPos next = cell.pos().relative(direction);
-                int nextX = cell.x() + localX(direction, facing);
-                int nextY = cell.y() + localY(direction);
+                int nextX = cell.x() + orientation.localX(direction);
+                int nextY = cell.y() + orientation.localY(direction);
                 if (Math.abs(nextX) <= max && Math.abs(nextY) <= max) {
                     pending.add(new Cell(next, nextX, nextY));
                 }
@@ -164,14 +165,6 @@ public final class MirrorGrid {
         }
         result.removeIf(cell -> !mirror.connectionMatches(level.getBlockState(seed), level.getBlockState(cell.pos())));
         return result;
-    }
-
-    private static int localX(Direction direction, Direction facing) {
-        return direction == facing.getCounterClockWise() ? 1 : direction == facing.getClockWise() ? -1 : 0;
-    }
-
-    private static int localY(Direction direction) {
-        return direction == Direction.UP ? 1 : direction == Direction.DOWN ? -1 : 0;
     }
 
     static Rectangle findLargestRectangle(Set<Cell> component, int max, boolean squareOnly) {
@@ -226,7 +219,7 @@ public final class MirrorGrid {
     }
 
     public static BlockPos toWorld(BlockPos origin, Direction facing, int x, int y) {
-        return origin.relative(facing.getCounterClockWise(), x).above(y);
+        return MirrorOrientation.of(facing).toWorld(origin, x, y);
     }
 
     public record Cell(BlockPos pos, int x, int y) {
