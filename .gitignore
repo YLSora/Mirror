@@ -23,3 +23,6 @@ classes/
 /neoforge/build/
 /forge/build/
 /build/
+
+/docs/
+/logs/
