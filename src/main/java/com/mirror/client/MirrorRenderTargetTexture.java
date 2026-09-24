@@ -9,9 +9,13 @@ import java.io.IOException;
 
 /** TextureManager handle for the color attachment of a RenderTarget. */
 public final class MirrorRenderTargetTexture extends AbstractTexture {
-    private final RenderTarget target;
+    private RenderTarget target;
 
     public MirrorRenderTargetTexture(RenderTarget target) {
+        this.target = target;
+    }
+
+    void setTarget(RenderTarget target) {
         this.target = target;
     }
 
@@ -24,7 +28,7 @@ public final class MirrorRenderTargetTexture extends AbstractTexture {
     @Override
     public int getId() {
         RenderSystem.assertOnRenderThreadOrInit();
-        return target.getColorTextureId();
+        return target == null ? 0 : target.getColorTextureId();
     }
 
     public void refreshId() {

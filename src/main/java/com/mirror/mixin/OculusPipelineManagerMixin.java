@@ -1,6 +1,7 @@
 package com.mirror.mixin;
 
 import com.mirror.client.MirrorDiagnostics;
+import com.mirror.client.MirrorCapturePool;
 import com.mirror.client.MirrorPassContext;
 import com.mirror.client.MirrorPipelineAccess;
 import com.mirror.client.MirrorPipelineSlotKey;
@@ -56,10 +57,10 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
     /**
      * Constructor-warmed pipelines created while Oculus is already loading its primary pipeline.
      * They are resolution-agnostic until first claimed; Iris resizes its RenderTargets on the first
-     * beginLevelRendering call. One spare is warmed per recursion depth (up to maxRecursionDepth), so
-     * a tunnel rendered to its configured depth never has to compile a complete Iris pipeline in a
-     * live mirror frame. Each depth occupies its own slot, so the spare count grows linearly with
-     * maxRecursionDepth rather than exploding combinatorially.
+     * beginLevelRendering call. Every stable shader capacity bucket is warmed for every configured
+     * recursion depth, so crossing 256/384/512/768/1024 px never performs a complete pipeline
+     * construction on the render thread. The count grows linearly with depth and the finite bucket
+     * set rather than with the number of mirror views.
      */
     @Unique
     private final Map<NamespacedId, Deque<MirrorPipelineState>> mirror$prewarmedPipelines = new HashMap<>();
@@ -104,7 +105,8 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
         mirror$primaryPipelineDimensions.put(primaryPipeline, realDimension);
         if (mirror$shaderGenerationFailed || !mirror$prewarmInitializedDimensions.add(realDimension)) return;
 
-        int desired = Math.max(1, MirrorConfig.CLIENT.maxRecursionDepth.get());
+        int desired = Math.max(1, MirrorConfig.CLIENT.maxRecursionDepth.get())
+                * MirrorCapturePool.shaderBucketCount();
         Deque<MirrorPipelineState> warmed = mirror$prewarmedPipelines.computeIfAbsent(
                 realDimension, ignored -> new ArrayDeque<>());
         if (warmed.size() >= desired) return;

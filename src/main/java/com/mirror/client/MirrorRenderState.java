@@ -151,11 +151,11 @@ public final class MirrorRenderState {
         clearStencil = GL11C.glGetInteger(GL11C.GL_STENCIL_CLEAR_VALUE);
     }
 
-    static MirrorRenderState capture() {
+    public static MirrorRenderState capture() {
         return new MirrorRenderState();
     }
 
-    void restore() {
+    public void restore() {
         RenderSystem.viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
         scissorState.restore();
         // BufferUploader caches the last bound VertexBuffer in its static lastImmediateBuffer field

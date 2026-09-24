@@ -1,6 +1,7 @@
 package com.mirror.client;
 
 import net.minecraftforge.fml.ModList;
+import me.jellysquid.mods.sodium.client.render.SodiumWorldRenderer;
 
 /**
  * Keeps the vanilla section-storage transaction out of Embeddium's renderer.  Embeddium owns its
@@ -26,5 +27,17 @@ public final class EmbeddiumCompat {
         if (!"0.3.31+mc1.20.1".equals(version)) {
             throw new IllegalStateException("Mirror supports Embeddium 0.3.31+mc1.20.1 only; found " + version);
         }
+    }
+
+    public static void releaseMirrorView(long viewId) {
+        if (!LOADED) return;
+        SodiumWorldRenderer renderer = SodiumWorldRenderer.instanceNullable();
+        if (renderer instanceof EmbeddiumViewStateAccess access) access.mirror$releaseView(viewId);
+    }
+
+    public static void finishCapture(long viewId) {
+        if (!LOADED) return;
+        SodiumWorldRenderer renderer = SodiumWorldRenderer.instanceNullable();
+        if (renderer instanceof EmbeddiumViewStateAccess access) access.mirror$finishCapture(viewId);
     }
 }

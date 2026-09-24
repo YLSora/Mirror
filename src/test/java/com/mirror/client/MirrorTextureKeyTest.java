@@ -14,8 +14,8 @@ class MirrorTextureKeyTest {
     void parentChainIsPartOfCacheIdentity() {
         UUID mirror = UUID.randomUUID();
         UUID parent = UUID.randomUUID();
-        MirrorTextureKey direct = new MirrorTextureKey(mirror, List.of(), 0, 64, 64);
-        MirrorTextureKey nested = new MirrorTextureKey(mirror, List.of(parent), 1, 32, 32);
+        MirrorTextureKey direct = new MirrorTextureKey(mirror, List.of(), 0);
+        MirrorTextureKey nested = new MirrorTextureKey(mirror, List.of(parent), 1);
 
         assertNotEquals(direct, nested);
         assertTrue(nested.containsParent(parent));

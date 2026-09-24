@@ -1,89 +1,107 @@
 package com.mirror.mixin;
 
+import com.mirror.client.EmbeddiumMirrorViewState;
+import com.mirror.client.EmbeddiumSectionStateAccess;
+import com.mirror.client.EmbeddiumViewEpoch;
 import com.mirror.client.MirrorLevelRenderer;
 import com.mirror.client.MirrorPassContext;
+import it.unimi.dsi.fastutil.longs.Long2ReferenceMap;
+import me.jellysquid.mods.sodium.client.render.chunk.ChunkUpdateType;
+import me.jellysquid.mods.sodium.client.render.chunk.RenderSection;
+import me.jellysquid.mods.sodium.client.render.chunk.lists.SortedRenderLists;
+import me.jellysquid.mods.sodium.client.render.viewport.Viewport;
+import net.minecraft.client.Camera;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.core.SectionPos;
+import org.objectweb.asm.Opcodes;
+import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-import java.util.Collection;
+import java.util.ArrayDeque;
+import java.util.Deque;
+import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Keeps Embeddium terrain maintenance out of second-and-deeper mirror passes.
- *
- * <p>Embeddium owns one global RenderSectionManager. Feeding every reflected camera through the
- * normal setup path otherwise makes deep mirrors create INITIAL_BUILD/REBUILD/SORT work for their
- * own distant visibility graph and upload those results while another camera is being rendered.
- * Deep reflections only need a read-only view of meshes already maintained by the main/direct
- * passes, so they still rebuild the visibility list but never enqueue deep-camera build/sort work
- * or upload terrain during a recursive capture.</p>
- */
+/** Mirror visibility never mutates main-owned region lists or runs terrain/ship maintenance. */
 @Pseudo
 @Mixin(targets = "me.jellysquid.mods.sodium.client.render.chunk.RenderSectionManager", remap = false)
-abstract class EmbeddiumRenderSectionManagerMixin {
-    @Shadow
-    private Map<?, ?> rebuildLists;
+abstract class EmbeddiumRenderSectionManagerMixin implements EmbeddiumSectionStateAccess {
+    @Shadow private Map<ChunkUpdateType, ArrayDeque<RenderSection>> rebuildLists;
+    @Shadow @Final private Long2ReferenceMap<RenderSection> sectionByPosition;
+    @Shadow @Final private ClientLevel world;
+    @Shadow private SortedRenderLists renderLists;
+    @Shadow private float getSearchDistance() { throw new AssertionError(); }
+    @Shadow private boolean shouldUseOcclusionCulling(Camera camera, boolean spectator) { throw new AssertionError(); }
 
-    /**
-     * Embeddium normally searches its configured main-world distance and does not observe
-     * GameRenderer.renderDistance. For recursive mirror passes, use Mirror's anchored render
-     * distance as the visibility search radius. The reflected camera recedes from the player at
-     * deeper recursion levels, so this distance must grow (not shrink) to keep the loaded sections
-     * inside the search range; otherwise deep reflections search an empty region and render sky.
-     */
-    @Inject(method = "getSearchDistance()F", at = @At("RETURN"), cancellable = true,
-            require = 1, remap = false)
+    @Unique private final Map<Long, EmbeddiumMirrorViewState> mirror$views = new HashMap<>();
+    @Unique private final Deque<SortedRenderLists> mirror$outerLists = new ArrayDeque<>();
+    @Unique private final Deque<EmbeddiumMirrorViewState> mirror$outerViews = new java.util.LinkedList<>();
+    @Unique private EmbeddiumMirrorViewState mirror$activeView;
+
+    @Override
+    public void mirror$beginView(Camera camera, Viewport viewport, int frame, boolean spectator) {
+        mirror$outerLists.push(renderLists);
+        mirror$outerViews.push(mirror$activeView);
+        EmbeddiumMirrorViewState view = mirror$views.computeIfAbsent(MirrorPassContext.current().viewId(),
+                ignored -> new EmbeddiumMirrorViewState(sectionByPosition, world));
+        mirror$activeView = view;
+        view.prepare(viewport, frame, getSearchDistance(), shouldUseOcclusionCulling(camera, spectator));
+        view.contributeRebuilds(rebuildLists);
+        renderLists = view.renderLists();
+    }
+
+    @Override
+    public void mirror$endView() {
+        renderLists = mirror$outerLists.pop();
+        mirror$activeView = mirror$outerViews.pop();
+    }
+
+    @Inject(method = "renderLayer", at = @At("HEAD"), require = 1)
+    private void mirror$countLayerDraw(CallbackInfo callback) {
+        if (mirror$activeView != null) mirror$activeView.recordLayerDraw();
+    }
+
+    @Inject(method = "isSectionVisible(III)Z", at = @At("HEAD"), cancellable = true, require = 1)
+    private void mirror$useViewVisibility(int x, int y, int z, CallbackInfoReturnable<Boolean> callback) {
+        if (mirror$activeView != null) {
+            RenderSection section = sectionByPosition.get(SectionPos.asLong(x, y, z));
+            callback.setReturnValue(section != null && mirror$activeView.isVisible(section));
+        }
+    }
+
+    @Inject(method = "getSearchDistance()F", at = @At("RETURN"), cancellable = true, require = 1)
     private void mirror$capDeepReflectionSearchDistance(CallbackInfoReturnable<Float> callback) {
-        if (!mirror$isDeepReflection()) return;
-
-        float mirrorDistance = MirrorPassContext.current().renderDistance();
-        if (Float.isFinite(mirrorDistance) && mirrorDistance > 0.0f) {
-            callback.setReturnValue(mirrorDistance);
+        if (MirrorPassContext.isActive() && MirrorLevelRenderer.isRecursivePass()) {
+            callback.setReturnValue(MirrorPassContext.current().renderDistance());
         }
     }
 
-    /** Completed global build results are uploaded once by the main/direct terrain pass. */
-    @Inject(method = "uploadChunks()V", at = @At("HEAD"), cancellable = true,
-            require = 1, remap = false)
-    private void mirror$skipDeepReflectionUploads(CallbackInfo callback) {
-        if (mirror$isDeepReflection()) callback.cancel();
+    @Inject(method = {"onSectionAdded(III)V", "onSectionRemoved(III)V", "uploadChunks()V", "scheduleRebuild(IIIZ)V"},
+            at = @At(value = "FIELD", target =
+                    "Lme/jellysquid/mods/sodium/client/render/chunk/RenderSectionManager;needsUpdate:Z",
+                    opcode = Opcodes.PUTFIELD, shift = At.Shift.AFTER), require = 4)
+    private void mirror$invalidateGeometry(CallbackInfo callback) {
+        EmbeddiumViewEpoch.invalidate();
     }
 
-    /**
-     * Dynamic translucent sorting stores the camera position back into each RenderSection. A
-     * reflected camera would therefore make the main camera and every recursion depth re-sort the
-     * same distant translucent sections against one another every frame.
-     */
-    @Inject(method = "checkTranslucencyChange()V", at = @At("HEAD"), cancellable = true,
-            require = 1, remap = false)
-    private void mirror$skipDeepReflectionTranslucencyResort(CallbackInfo callback) {
-        if (mirror$isDeepReflection()) callback.cancel();
+    @Inject(method = "markGraphDirty()V", at = @At("HEAD"), cancellable = true, require = 1)
+    private void mirror$invalidateExplicitGraphChange(CallbackInfo callback) {
+        if (MirrorPassContext.isActive()) callback.cancel();
+        else EmbeddiumViewEpoch.invalidate();
     }
 
-    /**
-     * VisibleChunkCollector also returns INITIAL_BUILD/REBUILD queues for unbuilt sections. Keep
-     * its render list (already-built geometry) but discard all mutation queues before the next
-     * camera can consume them. The section's pending-update flag itself is untouched, so the
-     * main/direct pass can enqueue the work normally when that section is relevant there.
-     */
-    @Inject(method = "createTerrainRenderList(Lnet/minecraft/client/Camera;Lme/jellysquid/mods/sodium/client/render/viewport/Viewport;IZ)V", at = @At("RETURN"),
-            require = 1, remap = false)
-    private void mirror$discardDeepReflectionTerrainQueues(CallbackInfo callback) {
-        if (!mirror$isDeepReflection() || rebuildLists == null) return;
-
-        for (Object value : rebuildLists.values()) {
-            if (value instanceof Collection<?> collection) {
-                collection.clear();
-            }
-        }
+    @Inject(method = "destroy()V", at = @At("HEAD"), require = 1)
+    private void mirror$clearViewListsOnDestroy(CallbackInfo callback) {
+        mirror$views.clear();
+        EmbeddiumViewEpoch.invalidate();
     }
 
-    private static boolean mirror$isDeepReflection() {
-        return MirrorLevelRenderer.isRecursivePass() && MirrorPassContext.isActive();
-    }
+    @Override public void mirror$releaseView(long viewId) { mirror$views.remove(viewId); }
 }

@@ -1,9 +1,9 @@
 package com.mirror.mixin;
 
-import com.mirror.client.MirrorDiagnostics;
 import com.mirror.client.MirrorPassContext;
 import com.mirror.client.MirrorTemporalStateAccess;
-import com.mirror.client.OculusRenderTargetsAccess;
+import com.mirror.client.OculusMirrorHistory;
+import net.irisshaders.iris.shaderpack.properties.PackDirectives;
 import net.irisshaders.iris.targets.RenderTargets;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -14,49 +14,36 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.HashSet;
-import java.util.Set;
-
-/**
- * Prevents stale persistent history from being consumed when a new reflected camera first enters a
- * shared pipeline, without clearing colortex every time already-known mirror views alternate.
- *
- * <p>A view causes one full clear only on its first use (or after the view is explicitly released):
- * normal A/B/A/B alternation between mirrors sharing one slot keeps TAA/SSR accumulation alive
- * instead of forcing a clear each pass.</p>
- *
- * <p>Temporal accumulation is deliberately kept for every depth. Clearing the gbuffer every frame
- * resets path-traced/temporal shaders (iterationT, Derivative, Sundial) to their fog-clear color and
- * makes the recursive mirror-in-mirror render as a white screen, because those shaders need the
- * accumulated history to converge. Stale-history jitter caused by budget deferral is instead handled
- * by {@link com.mirror.client.MirrorViewHistory}'s frame-continuity guard, which returns the current
- * matrices whenever the last commit was not the immediately preceding frame.</p>
- */
+/** Each reflected camera keeps its own persistent colortex pair within a shared shader slot. */
 @Pseudo
 @Mixin(targets = "net.irisshaders.iris.pipeline.IrisRenderingPipeline", remap = false)
 abstract class OculusMirrorTemporalStateMixin implements MirrorTemporalStateAccess {
-    @Shadow
-    @Final
-    private RenderTargets renderTargets;
+    @Shadow @Final private RenderTargets renderTargets;
+    @Shadow @Final private PackDirectives packDirectives;
+    @Unique private final OculusMirrorHistory mirror$history = new OculusMirrorHistory();
 
-    @Unique
-    private final Set<Long> mirror$knownViews = new HashSet<>();
-
-    @Inject(method = "beginLevelRendering", at = @At("HEAD"), require = 1, remap = false)
-    private void mirror$resetNewViewTemporalAttachments(CallbackInfo callback) {
+    @Inject(method = "beginLevelRendering", at = @At("HEAD"), require = 1)
+    private void mirror$saveOutgoingHistory(CallbackInfo callback) {
         if (!MirrorPassContext.isActive()) return;
-
-        long viewId = MirrorPassContext.current().viewId();
-        if (!mirror$knownViews.add(viewId)) return;
-
-        // Only the first use of a view invalidates shared persistent history. Normal A/B/A/B view
-        // alternation keeps temporal accumulation alive instead of forcing a full clear each pass.
-        ((OculusRenderTargetsAccess) (Object) renderTargets).mirror$requestFullClear();
-        MirrorDiagnostics.recordTemporalAttachmentReset();
+        mirror$history.leave(MirrorPassContext.current().viewId(), renderTargets,
+                packDirectives.getRenderTargetDirectives().getRenderTargetSettings());
     }
 
-    @Override
-    public void mirror$releaseView(long viewId) {
-        mirror$knownViews.remove(viewId);
+    @Inject(method = "beginLevelRendering", at = @At(value = "INVOKE",
+            target = "Lnet/irisshaders/iris/targets/RenderTargets;isFullClearRequired()Z"), require = 1)
+    private void mirror$restoreIncomingHistory(CallbackInfo callback) {
+        if (!MirrorPassContext.isActive()) return;
+        mirror$history.enter(MirrorPassContext.current().viewId(), renderTargets,
+                packDirectives.getRenderTargetDirectives().getRenderTargetSettings());
     }
+
+    @Inject(method = "finalizeLevelRendering", at = @At("RETURN"), require = 1)
+    private void mirror$commitHistory(CallbackInfo callback) {
+        if (MirrorPassContext.isActive()) mirror$history.commit();
+    }
+
+    @Inject(method = "destroy", at = @At("HEAD"), require = 1)
+    private void mirror$destroyHistory(CallbackInfo callback) { mirror$history.destroy(); }
+
+    @Override public void mirror$releaseView(long viewId) { mirror$history.release(viewId); }
 }

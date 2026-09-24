@@ -53,6 +53,7 @@ mixin {
     config 'mirror.mixins.json'
     config 'mirror_bridge.mixins.json'
     config 'mirror_oculus.mixins.json'
+    config 'mirror_optional.mixins.json'
 }
 
 repositories {
@@ -67,6 +68,9 @@ dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
     compileOnly fg.deobf("maven.modrinth:oculus:${oculus_version}")
     compileOnly fg.deobf("maven.modrinth:embeddium:${embeddium_version}")
+    // Exact API used by the optional Stage B mixins; never bundled or installed.
+    compileOnly files(providers.gradleProperty('voxyCompileJar').getOrElse(
+            'libs/neo-voxy-0.3.5-alpha.1-mc1.20.1-forge-client.jar'))
     testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
     compileOnly(annotationProcessor('io.github.llamalad7:mixinextras-common:0.5.3'))
@@ -134,7 +138,7 @@ jar {
                 'Implementation-Version'  : project.jar.archiveVersion,
                 'Implementation-Vendor'   : mod_author,
             'Built-On-Minecraft'      : minecraft_version,
-            'MixinConfigs'            : 'mirror.mixins.json,mirror_bridge.mixins.json,mirror_oculus.mixins.json'
+            'MixinConfigs'            : 'mirror.mixins.json,mirror_bridge.mixins.json,mirror_oculus.mixins.json,mirror_optional.mixins.json'
         ])
     }
     finalizedBy 'reobfJar'

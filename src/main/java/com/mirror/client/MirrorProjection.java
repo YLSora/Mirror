@@ -5,7 +5,7 @@ import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
 /**
- * Exact planar-mirror aperture and the shader-safe projection used to capture it.
+ * Exact planar-mirror aperture, with direct ordinary and centered shader capture projections.
  *
  * <p>The physical mirror is generally an off-axis aperture. Passing that projection directly to
  * arbitrary shader packs is fragile because many screen-space effects assume a centered
@@ -54,6 +54,11 @@ public record MirrorProjection(float left, float right, float bottom, float top,
     public ViewportProjection fitViewport(int viewportWidth, int viewportHeight) {
         float halfHeight = requiredHalfHeight(viewportWidth, viewportHeight, 0.0f);
         return fitViewport(viewportWidth, viewportHeight, halfHeight);
+    }
+
+    /** Ordinary rendering needs only the physical aperture, with no centered overscan. */
+    public ViewportProjection offAxis() {
+        return new ViewportProjection(left, right, bottom, top, nearPlane, UvRect.full());
     }
 
     /**
@@ -112,8 +117,11 @@ public record MirrorProjection(float left, float right, float bottom, float top,
     public record ViewportProjection(float left, float right, float bottom, float top,
                                      float nearPlane, UvRect crop) {
         public ViewportProjection {
-            if (Math.abs(left + right) > 1.0e-4f || Math.abs(bottom + top) > 1.0e-4f) {
-                throw new IllegalArgumentException("capture projection must be centered");
+            if (!Float.isFinite(left) || !Float.isFinite(right)
+                    || !Float.isFinite(bottom) || !Float.isFinite(top)
+                    || !Float.isFinite(nearPlane) || nearPlane <= 0.0f
+                    || right <= left || top <= bottom || crop == null) {
+                throw new IllegalArgumentException("invalid capture projection");
             }
         }
 

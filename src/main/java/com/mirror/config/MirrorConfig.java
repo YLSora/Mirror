@@ -79,9 +79,9 @@ public final class MirrorConfig {
             renderDistance = builder.comment("镜子反射渲染器被考虑的最大距离。")
                     .translation("mirror.config.renderDistance")
                     .defineInRange("renderDistance", 48, 1, 256);
-            resolutionScale = builder.comment("反射渲染目标尺寸的倍率。")
-                    // Vista 的倍率是像素密度乘数（默认每方块 8 像素），
-                    // 而不是归一化的 0..1 渲染比例。
+            resolutionScale = builder.comment(
+                            "直接反射按主视口中镜面的裁剪投影面积分配像素：8 为约 1:1 像素密度，12 为 1.5 倍。",
+                            "目标尺寸使用稳定档位；不再按每方块模型像素或 24/40 格距离分档。")
                     .translation("mirror.config.resolutionScale")
                     .defineInRange("resolutionScale", 8.0D, 1.0D, 32.0D);
             smoothSampling = builder.comment("可用时对反射纹理使用线性过滤。")
@@ -94,7 +94,8 @@ public final class MirrorConfig {
                             "最大总反射次数，包含直接镜子 pass。1 表示仅直接反射；最高 8 允许更深的镜中镜反射。")
                     .translation("mirror.config.maxRecursionDepth")
                     .defineInRange("maxRecursionDepth", 2, 1, 8);
-            recursiveResolutionDecay = builder.comment("每一层递归反射的分辨率倍率。")
+            recursiveResolutionDecay = builder.comment(
+                            "子反射相对父捕获中实际投影像素的线性密度倍率，从第一层镜中镜开始每层应用一次。")
                     .translation("mirror.config.recursiveResolutionDecay")
                     .defineInRange("recursiveResolutionDecay", 0.5D, 0.1D, 1.0D);
             reflectionFrameBudgetMs = builder.comment(
@@ -109,16 +110,16 @@ public final class MirrorConfig {
                     .translation("mirror.config.maxRecursiveViews")
                     .defineInRange("maxRecursiveViews", 64, 1, 512);
             recursiveCullMinPixels = builder.comment(
-                            "渲染原理剔除：跳过在父镜子中表观宽度低于此像素数的镜子的递归" +
-                            "（其自身反射将是亚像素且不可见）。0 禁用几何剔除。")
+                            "跳过父捕获有效镜面区域中投影面积小于此值平方的递归镜面。",
+                            "单位是投影面积的等效边长像素。0 禁用面积阈值，视口外仍不渲染。")
                     .translation("mirror.config.recursiveCullMinPixels")
                     .defineInRange("recursiveCullMinPixels", 1.0D, 0.0D, 64.0D);
             builder.pop();
 
             builder.push("debug");
             debug = builder.comment(
-                            "启用镜子相关诊断日志：周期性 120 帧反射汇总与管线预热/构建消息。" +
-                            "禁用可减少日志刷屏。")
+                            "启用逐帧镜面需求、拒绝原因、捕获尺寸、CPU 阶段计时及延迟 GPU 计时日志，" +
+                            "每 120 帧汇总 p50/p95/p99。详细诊断会增加日志开销，测量实际帧率时应关闭。")
                     .translation("mirror.config.debug")
                     .define("debug", false);
             builder.pop();

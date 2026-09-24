@@ -16,6 +16,7 @@
     "OculusFrameCounterMixin",
     "OculusTimerMixin",
     "OculusFinalSurfaceMixin",
+    "OculusFinalPassRendererMixin",
     "OculusPipelineManagerMixin",
     "OculusRenderTargetsMixin",
     "OculusMirrorTemporalStateMixin",

@@ -1,0 +1,28 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "refmap": "mirror.refmap.json",
+  "package": "com.mirror.compat.mixin",
+  "plugin": "com.mirror.compat.OptionalMixinPlugin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "EmbeddiumFrustumMixin",
+    "GrassCacheAccess",
+    "GrassCacheMixin",
+    "GrassTrailMixin",
+    "GrassWindMixin",
+    "GrassAnimationMixin",
+    "GrassDrawMixin",
+    "VoxyViewportMixin",
+    "VoxyDepthMixin",
+    "VoxyHiZMixin",
+    "VoxyNormalTargetsMixin",
+    "VoxyIrisViewportMixin",
+    "VoxyIrisTargetsMixin",
+    "VoxyIrisUniformNameAccess",
+    "VoxyIrisUniformLayoutMixin",
+    "VoxyMaintenanceMixin",
+    "VoxyPipelineMaintenanceMixin",
+    "VoxyGeometryEpochMixin"
+  ]
+}

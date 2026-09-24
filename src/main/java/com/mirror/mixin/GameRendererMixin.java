@@ -1,6 +1,8 @@
 package com.mirror.mixin;
 
 import com.mirror.client.MirrorLevelRenderer;
+import com.mirror.client.MirrorPassContext;
+import com.mirror.client.FlashlightCompat;
 import com.mirror.client.MirrorTextureManager;
 import com.mirror.client.OculusCompat;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -23,6 +25,13 @@ abstract class GameRendererMixin {
 
     @Unique
     private Matrix4f mirror$preBobPose;
+
+    @Inject(method = "renderLevel", at = @At("HEAD"))
+    private void mirror$beginOuterFrame(float partialTick, long finishTimeNano,
+                                        PoseStack renderPose, CallbackInfo callback) {
+        if (MirrorPassContext.isActive()) return;
+        MirrorTextureManager.beginOuterFrame();
+    }
 
     @ModifyArg(method = "renderLevel", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/client/renderer/GameRenderer;bobHurt(" +
@@ -50,7 +59,7 @@ abstract class GameRendererMixin {
     }
 
     /**
-     * Consume last frame's mirror requests after the outer LevelRenderer has returned but before
+     * Consume visible roots and queued children after the outer LevelRenderer has returned but before
      * GameRenderer starts the first-person hand pass. MirrorLevelRenderer can therefore render the
      * full entity pipeline (including PlayerRenderer/YSM) without re-entering an active world pass,
      * while vanilla hand and GUI rendering still establish their own normal item-dependent state
@@ -64,7 +73,8 @@ abstract class GameRendererMixin {
             opcode = Opcodes.GETFIELD, ordinal = 0))
     private void mirror$renderPendingReflections(float partialTick, long finishTimeNano,
                                                   PoseStack renderPose, CallbackInfo callback) {
-        if (MirrorLevelRenderer.isRenderingReflection() || OculusCompat.isShadowPass()) return;
+        if (MirrorPassContext.isActive() || OculusCompat.isShadowPass()
+                || FlashlightCompat.isAuxiliaryPass()) return;
         Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
         MirrorTextureManager.processPending(camera, partialTick);
     }

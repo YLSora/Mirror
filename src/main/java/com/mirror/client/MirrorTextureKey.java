@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 /** Stable cache identity for one mirror view, including its recursive parent chain. */
-public record MirrorTextureKey(UUID mirrorId, List<UUID> parentChain, int depth, int width, int height) {
+public record MirrorTextureKey(UUID mirrorId, List<UUID> parentChain, int depth) {
     public MirrorTextureKey {
         parentChain = List.copyOf(parentChain);
     }

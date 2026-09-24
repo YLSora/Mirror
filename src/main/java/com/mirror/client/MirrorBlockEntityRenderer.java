@@ -5,6 +5,8 @@ import com.mirror.common.MirrorBlockEntity;
 import com.mirror.common.MirrorOrientation;
 import com.mirror.common.ScreenRect;
 import com.mirror.config.MirrorConfig;
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.mojang.math.Axis;
@@ -18,6 +20,7 @@ import net.minecraft.world.phys.Vec3;
 
 public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<MirrorBlockEntity> {
     private static final float INSET = 1.0f / 16.0f;
+    private final MirrorScreenVisibility visibility = new MirrorScreenVisibility();
 
     public MirrorBlockEntityRenderer(BlockEntityRendererProvider.Context context) {
     }
@@ -72,41 +75,54 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
         if (!renderingReflection) eye = eye.add(MirrorLevelRenderer.getMainBobEyeOffset());
         MirrorReflection reflection = MirrorReflection.compute(screen.center(), screen.normal(), eye);
         if (!reflection.viewerInFront()) {
+            MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.BACKFACE);
             if (renderingReflection) {
                 MirrorDiagnostics.recordFacingRejected(MirrorLevelRenderer.getChildDepth());
             }
             return;
         }
 
-        MirrorReflectionTexture texture = !renderingReflection
-                ? MirrorTextureManager.request(entity)
-                : MirrorConfig.CLIENT.recursionMode.get() == MirrorConfig.RecursionMode.SHARED
-                ? MirrorTextureManager.requestShared(entity)
-                : MirrorTextureManager.requestRecursive(entity);
-        if (texture == null) return;
-        drawFace(entity, screen.orientation(), recession, poseStack, buffer, texture.textureLocation(),
-                OculusCompat.shouldDeferSurfacePresentation()
-                        || FlashlightCompat.shouldDeferSurfacePresentation());
+        poseStack.pushPose();
+        try {
+            MirrorOrientation orientation = screen.orientation();
+            poseStack.translate(0.5, 0.5, 0.5);
+            poseStack.mulPose(Axis.YP.rotationDegrees(180.0f - orientation.yaw()));
+            poseStack.mulPose(Axis.XP.rotationDegrees(-orientation.pitch()));
+            poseStack.translate(0.0, 0.0, -0.5 + recession - 0.001);
+            float left = 0.5f - entity.getConnectedWidth() + INSET;
+            float right = 0.5f - INSET;
+            float bottom = -0.5f + INSET;
+            float top = entity.getConnectedHeight() - 0.5f - INSET;
+            RenderTarget target = Minecraft.getInstance().getMainRenderTarget();
+            MirrorProjection.UvRect crop = MirrorPassContext.isActive()
+                    ? MirrorPassContext.current().reflectionCrop() : MirrorProjection.UvRect.full();
+            double projectedPixels = visibility.projectedArea(RenderSystem.getProjectionMatrix(),
+                    RenderSystem.getModelViewMatrix(), poseStack.last().pose(),
+                    left, right, bottom, top, target.viewWidth, target.viewHeight, crop);
+            if (projectedPixels <= 0.0) {
+                MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.OFFSCREEN);
+                return;
+            }
+
+            MirrorReflectionTexture texture = !renderingReflection
+                    ? MirrorTextureManager.request(entity, projectedPixels)
+                    : MirrorConfig.CLIENT.recursionMode.get() == MirrorConfig.RecursionMode.SHARED
+                    ? MirrorTextureManager.requestShared(entity, projectedPixels)
+                    : MirrorTextureManager.requestRecursive(entity, projectedPixels);
+            if (texture == null) return;
+            drawFace(poseStack, buffer, texture.textureLocation(), left, right, bottom, top,
+                    OculusCompat.shouldDeferSurfacePresentation()
+                            || FlashlightCompat.shouldDeferSurfacePresentation());
+        } finally {
+            poseStack.popPose();
+        }
     }
 
-    private static void drawFace(MirrorBlockEntity entity, MirrorOrientation orientation, double recession,
-                                 PoseStack poseStack, MultiBufferSource buffer,
-                                 net.minecraft.resources.ResourceLocation texture, boolean defer) {
-        poseStack.pushPose();
-        poseStack.translate(0.5, 0.5, 0.5);
-        poseStack.mulPose(Axis.YP.rotationDegrees(180.0f - orientation.yaw()));
-        poseStack.mulPose(Axis.XP.rotationDegrees(-orientation.pitch()));
-        poseStack.translate(0.0, 0.0, -0.5 + recession - 0.001);
-
-        float width = entity.getConnectedWidth();
-        float height = entity.getConnectedHeight();
-        float left = 0.5f - width + INSET;
-        float right = 0.5f - INSET;
-        float bottom = -0.5f + INSET;
-        float top = height - 0.5f - INSET;
+    private static void drawFace(PoseStack poseStack, MultiBufferSource buffer,
+                                 net.minecraft.resources.ResourceLocation texture,
+                                 float left, float right, float bottom, float top, boolean defer) {
         if (defer) {
             DeferredMirrorSurfaceRenderer.submit(texture, poseStack.last(), left, right, bottom, top);
-            poseStack.popPose();
             return;
         }
 
@@ -122,7 +138,6 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
         if (buffer instanceof MultiBufferSource.BufferSource source) {
             source.endBatch(renderType);
         }
-        poseStack.popPose();
     }
 
     private static void surfaceVertex(VertexConsumer vertices, PoseStack.Pose pose, float x, float y,

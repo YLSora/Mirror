@@ -1,6 +1,7 @@
 package com.mirror.mixin;
 
 import com.mirror.client.OculusCompat;
+import com.mirror.client.MirrorDiagnostics;
 import net.irisshaders.iris.mixin.LevelRendererAccessor;
 import net.minecraft.client.Camera;
 import org.spongepowered.asm.mixin.Mixin;
@@ -17,6 +18,8 @@ abstract class OculusMirrorShadowPassMixin {
             require = 1, remap = false)
     private void mirror$skipNestedShadowPass(LevelRendererAccessor levelRenderer, Camera camera,
                                               CallbackInfo callback) {
-        if (OculusCompat.isMirrorPass()) callback.cancel();
+        boolean nested = OculusCompat.isMirrorPass();
+        MirrorDiagnostics.recordShadowPass(nested);
+        if (nested) callback.cancel();
     }
 }

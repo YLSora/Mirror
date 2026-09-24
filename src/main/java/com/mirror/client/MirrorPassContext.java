@@ -1,6 +1,7 @@
 package com.mirror.client;
 
 import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mirror.compat.MirrorViewResources;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
@@ -118,7 +119,7 @@ public final class MirrorPassContext implements AutoCloseable {
         return renderDistance;
     }
 
-    /** Physical mirror aperture within the centered capture target. */
+    /** Physical aperture within the capture target; full UV range for ordinary off-axis captures. */
     public MirrorProjection.UvRect reflectionCrop() {
         return reflectionCrop;
     }
@@ -150,7 +151,10 @@ public final class MirrorPassContext implements AutoCloseable {
             throw new IllegalStateException("Mirror pass contexts must close in stack order");
         }
         contexts.pop();
-        if (contexts.isEmpty()) STACK.remove();
+        if (contexts.isEmpty()) {
+            STACK.remove();
+            MirrorViewResources.restoreMain();
+        }
     }
 
     public record ResolutionBucket(int widthBucket, int heightBucket) {

@@ -39,7 +39,7 @@ public final class MirrorClient {
     public static void registerReloadListeners(RegisterClientReloadListenersEvent event) {
         event.registerReloadListener((barrier, resources, preparationProfiler, executionProfiler,
                                        preparationExecutor, executionExecutor) ->
-                barrier.wait(null).thenRun(MirrorTextureManager::clear));
+                barrier.wait(null).thenRunAsync(MirrorTextureManager::clear, executionExecutor));
     }
 
     @SubscribeEvent
@@ -52,9 +52,7 @@ public final class MirrorClient {
     }
 
     private static void renderTick(TickEvent.RenderTickEvent event) {
-        // Mirror requests are consumed from LevelRenderer at the start of the next outer world
-        // pass, after that frame's camera/Oculus time state exists. RenderTick START only resets
-        // the deferred presentation list; rendering here would use stale temporal state.
+        // Captures run after the outer world pass. Reset deferred presentation before it starts.
         if (event.phase == TickEvent.Phase.START) {
             DeferredMirrorSurfaceRenderer.beginFrame();
         }

@@ -31,6 +31,7 @@ import java.util.List;
 public final class MirrorLevelRenderer {
     private static final Deque<RenderFrame> RENDER_STACK = new ArrayDeque<>();
     private static Vec3 mainBobEyeOffset = Vec3.ZERO;
+    private static MirrorCamera captureCamera;
 
     private MirrorLevelRenderer() {
     }
@@ -97,6 +98,7 @@ public final class MirrorLevelRenderer {
     public static void clearContext() {
         RENDER_STACK.clear();
         mainBobEyeOffset = Vec3.ZERO;
+        captureCamera = null;
     }
 
     static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
@@ -146,25 +148,33 @@ public final class MirrorLevelRenderer {
         try (MirrorPassContext pass = MirrorPassContext.begin(
                 viewId, recursionDepth, target, nearPlane, mirrorRenderDistance, reflectionCrop,
                 previous.modelView(), previous.projection(), previous.cameraPosition(), cullingOrigin)) {
+            long saveStart = MirrorDiagnostics.startTimer();
             MirrorRenderState renderState = MirrorRenderState.capture();
-            Camera camera = new MirrorCamera();
+            MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.STATE_SAVE, saveStart);
             List<ReflectionPlane> reflectionPath = new java.util.ArrayList<>(parentReflectionPath);
             reflectionPath.add(new ReflectionPlane(mirrorPlanePoint, mirrorNormal));
-            RenderFrame frame = new RenderFrame(mirror.getId(), recursionDepth,
-                    List.copyOf(parentChain), camera, List.copyOf(reflectionPath));
             GameRendererAccess rendererAccess = gameRenderer instanceof GameRendererAccess access ? access : null;
             BlockEntityRenderDispatcher blockEntityDispatcher = minecraft.getBlockEntityRenderDispatcher();
             EntityRenderDispatcher entityRenderDispatcher = minecraft.getEntityRenderDispatcher();
+            saveStart = MirrorDiagnostics.startTimer();
             OculusCompat.State oculusState = OculusCompat.capture(minecraft.levelRenderer);
+            MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.STATE_SAVE, saveStart);
             Camera previousMainCamera = rendererAccess == null ? gameRenderer.getMainCamera()
                     : rendererAccess.mirror$getMainCamera();
-            ((MirrorCamera) camera).configure(level, reflectedEye, yaw, pitch, partialTick);
+            long cameraStart = MirrorDiagnostics.startTimer();
+            if (captureCamera == null) captureCamera = new MirrorCamera();
+            MirrorCamera camera = captureCamera;
+            camera.configure(level, reflectedEye, yaw, pitch, partialTick);
+            MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.CAMERA_PREPARE, cameraStart);
+            RenderFrame frame = new RenderFrame(mirror.getId(), recursionDepth,
+                    List.copyOf(parentChain), camera, List.copyOf(reflectionPath));
 
             MirrorLevelRendererHooks.State cullState = null;
             boolean framePushed = false;
             boolean renderedFrame = false;
             boolean oldSmartCull = minecraft.smartCull;
             DeferredMirrorSurfaceRenderer.PassScope deferredSurfaces = null;
+            long prepareStart = MirrorDiagnostics.startTimer();
             try {
                 oculusState.enterReflection();
                 // The reflected camera sits at a virtual mirror-image position. Physical
@@ -216,33 +226,46 @@ public final class MirrorLevelRenderer {
                 poseStack.last().normal().set(viewNormal);
                 RenderSystem.setInverseViewRotationMatrix(new Matrix3f(poseStack.last().normal()).invert());
                 minecraft.levelRenderer.prepareCullFrustum(poseStack, camera.getPosition(), projection);
-                minecraft.levelRenderer.renderLevel(poseStack, partialTick, System.nanoTime(), false,
-                        camera, gameRenderer, gameRenderer.lightTexture(), projection);
+                MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.WORLD_PREPARE, prepareStart);
+                prepareStart = 0L;
+                long worldStart = MirrorDiagnostics.startTimer();
+                MirrorDiagnostics.recordWorldCapture(recursionDepth);
+                try {
+                    minecraft.levelRenderer.renderLevel(poseStack, partialTick, System.nanoTime(), false,
+                            camera, gameRenderer, gameRenderer.lightTexture(), projection);
+                } finally {
+                    EmbeddiumCompat.finishCapture(viewId);
+                    MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.WORLD_CAPTURE, worldStart);
+                }
                 renderedFrame = true;
             } finally {
-                if (cullState != null) cullState.close();
-                if (deferredSurfaces != null) deferredSurfaces.close();
-                if (framePushed) {
-                    RenderFrame popped = RENDER_STACK.pop();
-                    if (popped != frame) {
-                        throw new IllegalStateException("Mirror render frames closed out of order");
+                MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.WORLD_PREPARE, prepareStart);
+                long restoreStart = MirrorDiagnostics.startTimer();
+                try {
+                    if (cullState != null) cullState.close();
+                    if (deferredSurfaces != null) deferredSurfaces.close();
+                    if (framePushed) {
+                        RenderFrame popped = RENDER_STACK.pop();
+                        if (popped != frame) {
+                            throw new IllegalStateException("Mirror render frames closed out of order");
+                        }
                     }
+                    minecraft.smartCull = oldSmartCull;
+                    if (minecraftAccess != null) minecraftAccess.mirror$setMainRenderTarget(mainTarget);
+                    // Iris' RenderTarget listener must see the outer pipeline before binding it.
+                    oculusState.close();
+                    renderState.restore();
+                    if (rendererAccess != null) {
+                        rendererAccess.mirror$setRenderDistance(oldRenderDistance);
+                        rendererAccess.mirror$setMainCamera(previousMainCamera);
+                    }
+                    blockEntityDispatcher.prepare(level, previousMainCamera, minecraft.hitResult);
+                    entityRenderDispatcher.prepare(level, previousMainCamera, minecraft.crosshairPickEntity);
+                    mainTarget.bindWrite(true);
+                    RenderSystem.viewport(0, 0, mainTarget.width, mainTarget.height);
+                } finally {
+                    MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.STATE_RESTORE, restoreStart);
                 }
-                minecraft.smartCull = oldSmartCull;
-                if (minecraftAccess != null) minecraftAccess.mirror$setMainRenderTarget(mainTarget);
-                // Restore the exact outer Oculus pipeline and captured state before the outer
-                // framebuffer is bound. Iris' RenderTarget listener reads the active pipeline at
-                // bind time.
-                oculusState.close();
-                renderState.restore();
-                if (rendererAccess != null) {
-                    rendererAccess.mirror$setRenderDistance(oldRenderDistance);
-                    rendererAccess.mirror$setMainCamera(previousMainCamera);
-                }
-                blockEntityDispatcher.prepare(level, previousMainCamera, minecraft.hitResult);
-                entityRenderDispatcher.prepare(level, previousMainCamera, minecraft.crosshairPickEntity);
-                mainTarget.bindWrite(true);
-                RenderSystem.viewport(0, 0, mainTarget.width, mainTarget.height);
             }
             if (renderedFrame) {
                 viewHistory.commit(viewMatrix, projection, reflectedEye);
@@ -268,10 +291,13 @@ public final class MirrorLevelRenderer {
             // state that expects the camera entity to occupy the camera's actual position.
             if (cameraEntity == null || cameraEntity.level() != level) {
                 cameraEntity = new Display.BlockDisplay(EntityType.BLOCK_DISPLAY, level);
+                MirrorDiagnostics.recordCameraEntity();
             }
             cameraEntity.setPos(position);
             cameraEntity.setYRot(yaw);
             cameraEntity.setXRot(pitch);
+            // Sequential views must never interpolate the dummy from the previous mirror's eye.
+            cameraEntity.setOldPosAndRot();
 
             setup(level, cameraEntity, true, false, partialTick);
             setPosition(position);

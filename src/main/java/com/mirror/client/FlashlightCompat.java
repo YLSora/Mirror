@@ -15,7 +15,7 @@ public final class FlashlightCompat {
      * surface is scene color, not source geometry for either target, so it must not be submitted
      * during those auxiliary passes.
      */
-    static boolean isAuxiliaryPass() {
+    public static boolean isAuxiliaryPass() {
         return isSet(ALBEDO_ACTIVE) || isSet(SHADOW_ACTIVE);
     }
 

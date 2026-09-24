@@ -39,7 +39,7 @@ public final class MirrorLevelRendererHooks {
         State state = new State(access);
         try {
             Object currentStorage = access.mirror$getRenderChunkStorage().get();
-            Object isolatedStorage = textureState.getOrCreate(currentStorage, viewArea.chunks.length);
+            Object isolatedStorage = textureState.getOrCreate(currentStorage, viewArea);
             Queue<Object> queue = new ArrayDeque<>();
             // Vanilla's occlusion graph uses the camera position both when seeding the BFS and
             // while propagating it. Keep that position identical for off-axis mirror passes;
@@ -99,20 +99,22 @@ public final class MirrorLevelRendererHooks {
     /** Persistent culling storage owned by one MirrorReflectionTexture. */
     public static final class TextureState {
         private Object storage;
-        private int sectionCount = -1;
+        private ViewArea owner;
 
-        private Object getOrCreate(Object vanillaStorage, int requiredSectionCount) throws Exception {
-            if (storage == null || sectionCount != requiredSectionCount
+        private Object getOrCreate(Object vanillaStorage, ViewArea viewArea) throws Exception {
+            // A reload can replace all chunk VAOs without changing the number of sections.
+            // Never carry the old graph's RenderChunks into the new ViewArea generation.
+            if (storage == null || owner != viewArea
                     || storage.getClass() != vanillaStorage.getClass()) {
-                storage = newStorage(vanillaStorage, requiredSectionCount);
-                sectionCount = requiredSectionCount;
+                storage = newStorage(vanillaStorage, viewArea.chunks.length);
+                owner = viewArea;
             }
             return storage;
         }
 
         public void clear() {
             storage = null;
-            sectionCount = -1;
+            owner = null;
         }
     }
 

@@ -20,6 +20,9 @@ config="mirror_bridge.mixins.json"
 [[mixins]]
 config="mirror_oculus.mixins.json"
 
+[[mixins]]
+config="mirror_optional.mixins.json"
+
 [[dependencies.${mod_id}]]
 modId="forge"
 mandatory=true
