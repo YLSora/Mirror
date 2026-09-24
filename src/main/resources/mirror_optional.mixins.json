@@ -18,6 +18,8 @@
     "VoxyHiZMixin",
     "VoxyNormalTargetsMixin",
     "VoxyIrisViewportMixin",
+    "VoxyIrisHistoryMixin",
+    "VoxyIrisPreviousUniformMixin",
     "VoxyIrisTargetsMixin",
     "VoxyIrisUniformNameAccess",
     "VoxyIrisUniformLayoutMixin",

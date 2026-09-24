@@ -10,6 +10,7 @@
     "OculusShaderSourceCompatibilityMixin",
     "OculusCustomUniformExpressionMixin",
     "OculusPreviousMatrixMixin",
+    "OculusPerViewUniformsMixin",
     "OculusCameraPositionTrackerMixin",
     "OculusCameraUniformsMixin",
     "OculusCenterDepthSamplerMixin",
