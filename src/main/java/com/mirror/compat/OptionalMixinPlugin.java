@@ -18,6 +18,7 @@ public final class OptionalMixinPlugin implements IMixinConfigPlugin {
                     && FMLLoader.getLoadingModList().getModFileById("oculus") != null;
         }
         String mod = mixin.contains("Embeddium") ? "embeddium"
+                : mixin.contains("Nostalgic") ? "nostalgic_tweaks"
                 : mixin.contains("Grass") ? "grassiergrass" : "voxy";
         return FMLLoader.getLoadingModList().getModFileById(mod) != null;
     }
