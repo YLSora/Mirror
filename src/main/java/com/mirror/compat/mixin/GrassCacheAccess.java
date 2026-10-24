@@ -11,6 +11,18 @@ import org.spongepowered.asm.mixin.gen.Invoker;
 @Pseudo
 @Mixin(targets = "com.leonardoinc22.shortgrass.client.render.GrassSectionCache", remap = false)
 public interface GrassCacheAccess {
+    @Invoker("beginMaintenance")
+    static void mirror$beginMaintenance() { throw new AssertionError(); }
+
+    @Invoker("loadedChunkVersion")
+    static long mirror$loadedChunkVersion() { throw new AssertionError(); }
+
+    @Invoker("visibilityFingerprint")
+    static int mirror$visibilityFingerprint(Frustum frustum) { throw new AssertionError(); }
+
+    @Invoker("setViewDemand")
+    static void mirror$setDemand(it.unimi.dsi.fastutil.longs.LongSet sections, long version, long visibilityVersion,
+                                 java.util.function.ToIntFunction<net.minecraft.world.phys.AABB> visibility) { throw new AssertionError(); }
     @Invoker("drainPendingDirtySections")
     static void mirror$drainDirty() { throw new AssertionError(); }
 

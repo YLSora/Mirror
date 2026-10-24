@@ -15,11 +15,18 @@ import org.joml.Matrix4f;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 
 /** Collects this frame's real views before spending Grassier Grass's single build budget. */
 public final class GrassFrame {
     private static final List<Demand> DEMANDS = new ArrayList<>();
-    private static final List<Demand> LOD_DEMANDS = new ArrayList<>();
+    private static final Map<View, Demand> LOD_DEMANDS = new HashMap<>();
+    private static final Map<View, Demand> RANGE_DEMANDS = new HashMap<>();
+    private static final LongOpenHashSet SECTIONS = new LongOpenHashSet();
+    private static long rangeVersion, loadedVersion = -1;
+    private static final java.util.function.ToIntFunction<AABB> VISIBILITY = GrassFrame::visibility;
     private static final Frustum UNION = new Frustum(new Matrix4f(), new Matrix4f()) {
         @Override public boolean isVisible(AABB bounds) {
             for (Demand demand : DEMANDS) {
@@ -45,6 +52,7 @@ public final class GrassFrame {
     public static void clear() {
         begin();
         LOD_DEMANDS.clear();
+        RANGE_DEMANDS.clear(); SECTIONS.clear(); loadedVersion = -1; rangeVersion++;
     }
 
     public static boolean maintaining() { return maintaining; }
@@ -63,7 +71,8 @@ public final class GrassFrame {
             y = SectionPos.blockToSectionCoord(origin.y);
             z = SectionPos.blockToSectionCoord(origin.z);
         }
-        DEMANDS.add(new Demand(x, y, z, radius, vertical, eye,
+        View view = new View(MirrorPassContext.isActive(), MirrorPassContext.isActive() ? MirrorPassContext.current().viewId() : 0);
+        DEMANDS.add(new Demand(view, x, y, z, radius, vertical, eye,
                 frustum == null ? null : new Frustum(frustum)));
         // Shader/mesh format comes from the main view, never a transient shadow pipeline.
         if (!MirrorPassContext.isActive()) {
@@ -73,13 +82,15 @@ public final class GrassFrame {
     }
 
     public static boolean contains(long key) {
-        int x = SectionPos.x(key), y = SectionPos.y(key), z = SectionPos.z(key);
-        if (level == null || y < level.getMinSection() || y >= level.getMaxSection()
-                || !level.getChunkSource().hasChunk(x, z)) return false;
-        for (Demand demand : DEMANDS) {
-            if (demand.contains(x, y, z)) return true;
+        return SECTIONS.contains(key);
+    }
+
+    private static int visibility(AABB bounds) {
+        int best = 2;
+        for (Demand demand : DEMANDS) if (demand.frustum == null || demand.frustum.isVisible(bounds)) {
+            best = Math.min(best, demand.view.mirror ? 1 : 0);
         }
-        return false;
+        return best;
     }
 
     public static double distanceSquared(long key, boolean horizontal) {
@@ -118,52 +129,51 @@ public final class GrassFrame {
             return;
         }
         Parameters args = parameters;
+        GrassCacheAccess.mirror$beginMaintenance();
         lodChanged = DEMANDS.size() != LOD_DEMANDS.size();
-        for (int i = 0; !lodChanged && i < DEMANDS.size(); i++) {
-            Demand current = DEMANDS.get(i), previous = LOD_DEMANDS.get(i);
-            lodChanged = current.radius != previous.radius || current.x != previous.x
-                    || current.y != previous.y || current.z != previous.z
-                    || current.eye.distanceToSqr(previous.eye) >= 16.0;
+        boolean rangeChanged = DEMANDS.size() != RANGE_DEMANDS.size();
+        long visibilityVersion = 0;
+        for (Demand current : DEMANDS) {
+            Demand previous = LOD_DEMANDS.get(current.view);
+            lodChanged |= previous == null || !current.sameRange(previous) || current.eye.distanceToSqr(previous.eye) >= 16.0;
+            previous = RANGE_DEMANDS.get(current.view);
+            rangeChanged |= previous == null || !current.sameRange(previous);
+            visibilityVersion += 31L * current.view.hashCode() + 37L * current.eye.hashCode()
+                    + GrassCacheAccess.mirror$visibilityFingerprint(current.frustum);
         }
         // Enumerate only the physical client chunk envelope, not distant virtual mirror eyes.
         int loadedRadius = minecraft.options.getEffectiveRenderDistance() + 3;
         int playerX = SectionPos.blockToSectionCoord(minecraft.player.getX());
         int playerZ = SectionPos.blockToSectionCoord(minecraft.player.getZ());
-        int minX = Integer.MAX_VALUE, minY = Integer.MAX_VALUE, minZ = Integer.MAX_VALUE;
-        int maxX = Integer.MIN_VALUE, maxY = Integer.MIN_VALUE, maxZ = Integer.MIN_VALUE;
-        for (Demand demand : DEMANDS) {
-            minX = Math.min(minX, demand.x - demand.radius);
-            maxX = Math.max(maxX, demand.x + demand.radius);
-            minY = Math.min(minY, demand.y - demand.vertical);
-            maxY = Math.max(maxY, demand.y + demand.vertical);
-            minZ = Math.min(minZ, demand.z - demand.radius);
-            maxZ = Math.max(maxZ, demand.z + demand.radius);
+        long chunks = GrassCacheAccess.mirror$loadedChunkVersion();
+        if (rangeChanged || loadedVersion != chunks) {
+            SECTIONS.clear(); RANGE_DEMANDS.clear();
+            for (Demand demand : DEMANDS) {
+                RANGE_DEMANDS.put(demand.view, demand);
+                for (int sx = Math.max(demand.x - demand.radius, playerX - loadedRadius); sx <= Math.min(demand.x + demand.radius, playerX + loadedRadius); sx++)
+                    for (int sz = Math.max(demand.z - demand.radius, playerZ - loadedRadius); sz <= Math.min(demand.z + demand.radius, playerZ + loadedRadius); sz++) {
+                        if (!level.getChunkSource().hasChunk(sx, sz)) continue;
+                        for (int sy = Math.max(level.getMinSection(), demand.y - demand.vertical); sy <= Math.min(level.getMaxSection() - 1, demand.y + demand.vertical); sy++)
+                            if (demand.contains(sx, sy, sz)) SECTIONS.add(SectionPos.asLong(sx, sy, sz));
+                    }
+            }
+            loadedVersion = chunks; rangeVersion++;
         }
-        minX = Math.max(minX, playerX - loadedRadius);
-        maxX = Math.min(maxX, playerX + loadedRadius);
-        minZ = Math.max(minZ, playerZ - loadedRadius);
-        maxZ = Math.min(maxZ, playerZ + loadedRadius);
-        minY = Math.max(minY, level.getMinSection());
-        maxY = Math.min(maxY, level.getMaxSection() - 1);
-        if (minX > maxX || minY > maxY || minZ > maxZ) {
-            begin();
-            return;
-        }
-        int x = Math.floorDiv(minX + maxX, 2), y = Math.floorDiv(minY + maxY, 2);
-        int z = Math.floorDiv(minZ + maxZ, 2);
-        int radius = Math.max(maxX - x, maxZ - z), vertical = maxY - y;
+        int x = SectionPos.blockToSectionCoord(args.eye.x), y = SectionPos.blockToSectionCoord(args.eye.y);
+        int z = SectionPos.blockToSectionCoord(args.eye.z);
         long start = MirrorDiagnostics.startTimer();
         MirrorRenderState saved = MirrorRenderState.capture();
         maintaining = true;
         try {
+            GrassCacheAccess.mirror$setDemand(SECTIONS, rangeVersion, visibilityVersion, VISIBILITY);
             GrassCacheAccess.mirror$drainDirty();
-            GrassCacheAccess.mirror$evict(x, y, z, radius, vertical);
-            GrassCacheAccess.mirror$build(level, x, y, z, radius, vertical, args.eye,
+            GrassCacheAccess.mirror$evict(x, y, z, 0, 0);
+            GrassCacheAccess.mirror$build(level, x, y, z, 0, 0, args.eye,
                     args.tick, args.iris, args.compute, args.blade, args.snow, UNION);
             ThirdPartyFrame.count(ThirdPartyFrame.Work.GRASS_MAINTENANCE);
             if (lodChanged) {
                 LOD_DEMANDS.clear();
-                LOD_DEMANDS.addAll(DEMANDS);
+                for (Demand demand : DEMANDS) LOD_DEMANDS.put(demand.view, demand);
             }
         } finally {
             maintaining = false;
@@ -176,7 +186,11 @@ public final class GrassFrame {
     private record Parameters(long tick, boolean iris, boolean compute, TextureAtlasSprite blade,
                               TextureAtlasSprite snow, Vec3 eye) { }
 
-    private record Demand(int x, int y, int z, int radius, int vertical, Vec3 eye, Frustum frustum) {
+    private record View(boolean mirror, long id) { }
+    private record Demand(View view, int x, int y, int z, int radius, int vertical, Vec3 eye, Frustum frustum) {
+        boolean sameRange(Demand other) {
+            return x == other.x && y == other.y && z == other.z && radius == other.radius && vertical == other.vertical;
+        }
         boolean contains(int sx, int sy, int sz) {
             long dx = (long) sx - x, dz = (long) sz - z;
             return Math.abs((long) sy - y) <= vertical && dx * dx + dz * dz <= (long) radius * radius;

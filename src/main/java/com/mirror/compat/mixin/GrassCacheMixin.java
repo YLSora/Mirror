@@ -19,7 +19,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Pseudo
 @Mixin(targets = "com.leonardoinc22.shortgrass.client.render.GrassSectionCache", remap = false)
 abstract class GrassCacheMixin {
-    @Shadow private static int lastEvictSx;
 
     @Inject(method = "buildBudgeted", at = @At("HEAD"), cancellable = true, require = 1)
     private static void mirror$collect(ClientLevel level, int x, int y, int z, int radius, int vertical,
@@ -39,13 +38,6 @@ abstract class GrassCacheMixin {
     @Inject(method = "evictOutOfRange", at = @At("HEAD"), cancellable = true, require = 1)
     private static void mirror$unionEviction(CallbackInfo ci) {
         if (!GrassFrame.maintaining()) ci.cancel();
-        else lastEvictSx = Integer.MIN_VALUE; // Union membership can change without its envelope moving.
-    }
-
-    @Inject(method = "inRange", at = @At("HEAD"), cancellable = true, require = 1)
-    private static void mirror$inUnion(long key, int x, int y, int z, int radius, int vertical,
-                                       CallbackInfoReturnable<Boolean> ci) {
-        if (GrassFrame.maintaining()) ci.setReturnValue(GrassFrame.contains(key));
     }
 
     @Inject(method = "shouldRecheckLod", at = @At("HEAD"), cancellable = true, require = 1)
