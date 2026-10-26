@@ -1,6 +1,8 @@
 package com.mirror.mixin;
 
 import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mirror.MirrorMod;
 import com.mirror.client.MirrorLevelRenderer;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -11,7 +13,9 @@ import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
+import net.minecraftforge.common.extensions.IForgeBlockEntity;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -47,15 +51,16 @@ abstract class LevelRendererMixin {
         return renderer.isChunkCompiled(blockPos);
     }
 
-    // Block entities in this loop already come from the reflection pass's visible render sections.
-    // Applying the physical block-entity box to the virtual reflected-camera frustum a second time
-    // rejects the opposite mirror once the virtual camera has receded through several reflections.
-    // That used to stop new recursive requests around depth 4 regardless of maxRecursionDepth.
-    @ModifyExpressionValue(method = "renderLevel", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/client/renderer/culling/Frustum;isVisible(" +
-                    "Lnet/minecraft/world/phys/AABB;)Z"), require = 1)
-    private boolean mirror$useRecursiveBlockEntitySectionVisibility(boolean visible) {
-        return visible || MirrorLevelRenderer.isRecursivePass();
+    // A receding virtual camera must still submit the opposite mirror so recursion can continue to
+    // maxRecursionDepth. Frustum#isVisible accepts INFINITE_EXTENT_AABB unconditionally; only nested
+    // mirrors (and shipyard block entities) take that path, every other block entity keeps the
+    // reflected-frustum test.
+    @WrapOperation(method = "renderLevel", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/level/block/entity/BlockEntity;" +
+                    "getRenderBoundingBox()Lnet/minecraft/world/phys/AABB;", remap = false), require = 1)
+    private AABB mirror$keepRecursiveMirrorsVisible(BlockEntity blockEntity, Operation<AABB> original) {
+        return MirrorLevelRenderer.bypassesBlockEntityCulling(blockEntity)
+                ? IForgeBlockEntity.INFINITE_EXTENT_AABB : original.call(blockEntity);
     }
 
     // Vanilla has a second LocalPlayer-only gate in renderLevel: when the active camera entity

@@ -57,14 +57,15 @@ public final class MirrorBlockEntityRenderer implements BlockEntityRenderer<Mirr
             if (mode == MirrorConfig.RecursionMode.OFF) return;
             MirrorDiagnostics.recordRendererEntry(MirrorLevelRenderer.getChildDepth());
         }
-        MirrorBlockEntity master = MirrorBlock.getMasterBlockEntity(entity.getLevel(), entity.getBlockPos());
-        if (master == null || master.getBlockPos().equals(entity.getBlockPos()) == false) return;
+        // Only the rectangle's master cell owns a block entity; a stale tile left on another cell
+        // during regrouping must not submit the screen.
+        if (!MirrorBlock.isMasterState(entity.getLevel().getBlockState(entity.getBlockPos()))) return;
         // RECURSIVE mode must allow ancestor mirrors to appear again: a real two-mirror chain
         // alternates A -> B -> A -> B, with each step using a chain-isolated texture key. SHARED
         // mode still reuses direct textures, so keep its ancestor guard to avoid cyclic feedback.
         if (renderingReflection
                 && MirrorConfig.CLIENT.recursionMode.get() == MirrorConfig.RecursionMode.SHARED
-                && MirrorLevelRenderer.isParentMirror(master.getId())) return;
+                && MirrorLevelRenderer.isParentMirror(entity.getId())) return;
 
         ScreenRect screen = entity.getScreenRect();
         double recession = MirrorBlock.surfaceRecession(entity.getBlockState());

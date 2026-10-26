@@ -49,6 +49,7 @@ public final class MirrorTextureManager {
         }
         frameIndex++;
         VISIBLE_ROOTS.clear();
+        MirrorOuterColors.beginOuterFrame();
         MirrorDiagnostics.beginOuterFrame(frameIndex);
         ThirdPartyFrame.begin();
     }

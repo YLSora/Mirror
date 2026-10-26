@@ -1,5 +1,8 @@
 package com.mirror.mixin;
 
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.mirror.client.EmbeddiumViewStateAccess;
 import com.mirror.client.EmbeddiumSectionStateAccess;
 import com.mirror.client.EmbeddiumViewSetupState;
@@ -8,14 +11,16 @@ import com.mirror.client.MirrorPassContext;
 import me.jellysquid.mods.sodium.client.render.chunk.RenderSectionManager;
 import me.jellysquid.mods.sodium.client.render.viewport.Viewport;
 import net.minecraft.client.Camera;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
+import net.minecraftforge.common.extensions.IForgeBlockEntity;
+import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import java.util.ArrayDeque;
@@ -60,32 +65,62 @@ abstract class EmbeddiumWorldRendererMixin implements EmbeddiumViewStateAccess {
             access.mirror$releaseView(viewId);
         }
     }
-    @Redirect(method = "renderBlockEntities(Lcom/mojang/blaze3d/vertex/PoseStack;"
+    // Embeddium turns block-entity frustum culling off whenever Valkyrien Skies is installed, because
+    // VS re-enters these loops with shipyard-space render lists. A mirror pass then submitted every
+    // block entity of every section touched by its narrow aperture, once per view. Mirror passes cull
+    // against the reflected viewport; shipyard block entities keep the unculled path (see below).
+    @ModifyExpressionValue(method = "renderBlockEntities(Lcom/mojang/blaze3d/vertex/PoseStack;"
             + "Lnet/minecraft/client/renderer/RenderBuffers;"
             + "Lit/unimi/dsi/fastutil/longs/Long2ObjectMap;F"
             + "Lnet/minecraft/client/renderer/MultiBufferSource$BufferSource;DDD"
             + "Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderDispatcher;)V",
-            at = @At(value = "INVOKE",
-                    target = "Lme/jellysquid/mods/sodium/client/render/viewport/Viewport;"
-                            + "isBoxVisible(Lnet/minecraft/world/phys/AABB;)Z"),
+            at = @At(value = "FIELD", opcode = Opcodes.GETSTATIC, target =
+                    "Lme/jellysquid/mods/sodium/client/render/SodiumWorldRenderer;ENABLE_BLOCKENTITY_CULLING:Z"),
             require = 1, remap = false)
-    private boolean mirror$useRecursiveSectionVisibility(Viewport viewport, AABB bounds) {
-        if (MirrorLevelRenderer.isRecursivePass()) return true;
-        return viewport.isBoxVisible(bounds);
+    private boolean mirror$cullMirrorPassBlockEntities(boolean enabled) {
+        return enabled || MirrorLevelRenderer.isRenderingReflection();
     }
 
-    @Redirect(method = "renderGlobalBlockEntities(Lcom/mojang/blaze3d/vertex/PoseStack;"
+    @ModifyExpressionValue(method = "renderGlobalBlockEntities(Lcom/mojang/blaze3d/vertex/PoseStack;"
+            + "Lnet/minecraft/client/renderer/RenderBuffers;"
+            + "Lit/unimi/dsi/fastutil/longs/Long2ObjectMap;F"
+            + "Lnet/minecraft/client/renderer/MultiBufferSource$BufferSource;DDD"
+            + "Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderDispatcher;)V",
+            at = @At(value = "FIELD", opcode = Opcodes.GETSTATIC, target =
+                    "Lme/jellysquid/mods/sodium/client/render/SodiumWorldRenderer;ENABLE_BLOCKENTITY_CULLING:Z"),
+            require = 1, remap = false)
+    private boolean mirror$cullMirrorPassGlobalBlockEntities(boolean enabled) {
+        return enabled || MirrorLevelRenderer.isRenderingReflection();
+    }
+
+    // Viewport#isBoxVisible accepts INFINITE_EXTENT_AABB unconditionally. Only nested mirrors and
+    // shipyard block entities take that path; all others are culled by the reflected viewport.
+    @WrapOperation(method = "renderBlockEntities(Lcom/mojang/blaze3d/vertex/PoseStack;"
             + "Lnet/minecraft/client/renderer/RenderBuffers;"
             + "Lit/unimi/dsi/fastutil/longs/Long2ObjectMap;F"
             + "Lnet/minecraft/client/renderer/MultiBufferSource$BufferSource;DDD"
             + "Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderDispatcher;)V",
             at = @At(value = "INVOKE",
-                    target = "Lme/jellysquid/mods/sodium/client/render/viewport/Viewport;"
-                            + "isBoxVisible(Lnet/minecraft/world/phys/AABB;)Z"),
+                    target = "Lnet/minecraft/world/level/block/entity/BlockEntity;"
+                            + "getRenderBoundingBox()Lnet/minecraft/world/phys/AABB;"),
             require = 1, remap = false)
-    private boolean mirror$useRecursiveGlobalSectionVisibility(Viewport viewport, AABB bounds) {
-        if (MirrorLevelRenderer.isRecursivePass()) return true;
-        return viewport.isBoxVisible(bounds);
+    private AABB mirror$reflectionCullingBounds(BlockEntity blockEntity, Operation<AABB> original) {
+        return MirrorLevelRenderer.bypassesBlockEntityCulling(blockEntity)
+                ? IForgeBlockEntity.INFINITE_EXTENT_AABB : original.call(blockEntity);
+    }
+
+    @WrapOperation(method = "renderGlobalBlockEntities(Lcom/mojang/blaze3d/vertex/PoseStack;"
+            + "Lnet/minecraft/client/renderer/RenderBuffers;"
+            + "Lit/unimi/dsi/fastutil/longs/Long2ObjectMap;F"
+            + "Lnet/minecraft/client/renderer/MultiBufferSource$BufferSource;DDD"
+            + "Lnet/minecraft/client/renderer/blockentity/BlockEntityRenderDispatcher;)V",
+            at = @At(value = "INVOKE",
+                    target = "Lnet/minecraft/world/level/block/entity/BlockEntity;"
+                            + "getRenderBoundingBox()Lnet/minecraft/world/phys/AABB;"),
+            require = 1, remap = false)
+    private AABB mirror$reflectionGlobalCullingBounds(BlockEntity blockEntity, Operation<AABB> original) {
+        return MirrorLevelRenderer.bypassesBlockEntityCulling(blockEntity)
+                ? IForgeBlockEntity.INFINITE_EXTENT_AABB : original.call(blockEntity);
     }
 
 }

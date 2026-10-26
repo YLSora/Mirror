@@ -15,9 +15,12 @@ import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.PostChain;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderDispatcher;
 import net.minecraft.client.renderer.entity.EntityRenderDispatcher;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.Display;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 import org.joml.Matrix3f;
@@ -29,6 +32,8 @@ import java.util.List;
 
 /** Minimal state-isolated second LevelRenderer pass for direct reflections. */
 public final class MirrorLevelRenderer {
+    /** Loaded client chunks are within a few hundred blocks of the player; the VS shipyard is millions away. */
+    private static final double OUTSIDE_LOADED_WORLD_BLOCKS = 1 << 20;
     private static final Deque<RenderFrame> RENDER_STACK = new ArrayDeque<>();
     private static Vec3 mainBobEyeOffset = Vec3.ZERO;
     private static MirrorCamera captureCamera;
@@ -48,6 +53,23 @@ public final class MirrorLevelRenderer {
     public static boolean isRecursivePass() {
         RenderFrame frame = RENDER_STACK.peek();
         return frame != null && frame.recursionDepth() > 0;
+    }
+
+    /**
+     * Block entities that a reflection pass must submit without testing the reflected frustum.
+     * Recursive passes keep the opposite mirror even when its physical box misses the receding
+     * virtual frustum. Block entities far outside the loaded world (Valkyrien Skies renders ship
+     * block entities through the same loops in shipyard space, z beyond 12M) cannot be tested
+     * against a world-space frustum. Every other block entity is culled normally.
+     */
+    public static boolean bypassesBlockEntityCulling(BlockEntity blockEntity) {
+        if (!isRenderingReflection()) return false;
+        if (blockEntity instanceof MirrorBlockEntity && isRecursivePass()) return true;
+        Entity player = Minecraft.getInstance().player;
+        if (player == null) return true;
+        BlockPos pos = blockEntity.getBlockPos();
+        return Math.abs(pos.getX() - player.getX()) > OUTSIDE_LOADED_WORLD_BLOCKS
+                || Math.abs(pos.getZ() - player.getZ()) > OUTSIDE_LOADED_WORLD_BLOCKS;
     }
 
     public static boolean isParentMirror(UUID mirrorId) {
@@ -99,6 +121,12 @@ public final class MirrorLevelRenderer {
         RENDER_STACK.clear();
         mainBobEyeOffset = Vec3.ZERO;
         captureCamera = null;
+        MirrorOuterColors.beginOuterFrame();
+    }
+
+    /** The reusable reflection camera; its position is always set explicitly after Camera#setup. */
+    public static boolean isCaptureCamera(Camera camera) {
+        return camera != null && camera == captureCamera;
     }
 
     static void render(Level level, MirrorBlockEntity mirror, MirrorReflection reflection,
