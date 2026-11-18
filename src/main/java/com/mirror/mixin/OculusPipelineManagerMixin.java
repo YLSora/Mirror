@@ -1,7 +1,7 @@
 package com.mirror.mixin;
 
-import com.mirror.client.MirrorDiagnostics;
 import com.mirror.client.MirrorCapturePool;
+import com.mirror.client.MirrorDiagnostics;
 import com.mirror.client.MirrorPassContext;
 import com.mirror.client.MirrorPipelineAccess;
 import com.mirror.client.MirrorPipelineSlotKey;
@@ -9,6 +9,7 @@ import com.mirror.client.MirrorPipelineState;
 import com.mirror.client.MirrorPipelineUnavailableException;
 import com.mirror.client.MirrorTemporalStateAccess;
 import com.mirror.client.OculusCompat;
+import com.mirror.client.OculusTerrainProgramCacheAccess;
 import com.mirror.config.MirrorConfig;
 import net.irisshaders.iris.Iris;
 import net.irisshaders.iris.pipeline.IrisRenderingPipeline;
@@ -16,7 +17,10 @@ import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
 import net.irisshaders.iris.shaderpack.ShaderPack;
 import net.irisshaders.iris.shaderpack.materialmap.NamespacedId;
 import net.irisshaders.iris.shaderpack.materialmap.WorldRenderingSettings;
+import net.irisshaders.iris.shaderpack.loading.ProgramId;
+import net.irisshaders.iris.shaderpack.programs.ComputeSource;
 import net.irisshaders.iris.shaderpack.programs.ProgramSet;
+import net.irisshaders.iris.shaderpack.programs.ProgramSource;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.Shadow;
@@ -28,22 +32,22 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
- * Owns one stable Oculus pipeline per real dimension and mirror pipeline slot.
+ * Owns demand-driven secondary Oculus pipelines for the current shader generation.
  *
- * <p>A slot is isolated by recursion depth and capture resolution. The slot remains alive for the
- * current Oculus shader generation even when all views disappear. A newly constructed pipeline is
- * WARMING until Embeddium's {@code IrisChunkProgramOverrides.createShaders()} completes; only then
- * is the slot READY. At most one WARMING/constructing slot may consume heavyweight shader work in a
- * real outer frame.</p>
+ * <p>Mirror slots are grouped by the semantic ProgramSet, not by the real dimension. Iris creates
+ * separate ProgramSet objects for dimension overrides even when they resolve to the same world0
+ * directory, so equivalent sets are canonicalized by their parsed shader sources.</p>
  */
 @Pseudo
 @Mixin(targets = "net.irisshaders.iris.pipeline.PipelineManager", remap = false)
@@ -54,35 +58,44 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
     @Unique
     private final Map<MirrorPipelineSlotKey, MirrorPipelineState> mirror$mirrorPipelines = new HashMap<>();
 
-    /**
-     * Constructor-warmed pipelines created while Oculus is already loading its primary pipeline.
-     * They are resolution-agnostic until first claimed; Iris resizes its RenderTargets on the first
-     * beginLevelRendering call. Every stable shader capacity bucket is warmed for every configured
-     * recursion depth, so crossing 256/384/512/768/1024 px never performs a complete pipeline
-     * construction on the render thread. The count grows linearly with depth and the finite bucket
-     * set rather than with the number of mirror views.
-     */
     @Unique
-    private final Map<NamespacedId, Deque<MirrorPipelineState>> mirror$prewarmedPipelines = new HashMap<>();
-
-    @Unique
-    private final Set<NamespacedId> mirror$prewarmInitializedDimensions = new HashSet<>();
-
-    @Unique
-    private final Map<WorldRenderingPipeline, NamespacedId> mirror$primaryPipelineDimensions =
+    private final Map<ProgramSet, Deque<MirrorPassContext.PipelineSlot>> mirror$prewarmQueues =
             new IdentityHashMap<>();
+
+    @Unique
+    private final Set<ProgramSet> mirror$prewarmInitialized =
+            Collections.newSetFromMap(new IdentityHashMap<>());
+
+    @Unique
+    private final List<ProgramSet> mirror$programSetGroups = new ArrayList<>();
+
+    @Unique
+    private final Map<NamespacedId, ProgramSet> mirror$programSetsByDimension = new HashMap<>();
+
+    @Unique
+    private final Map<ProgramSet, List<String>> mirror$programSetSignatures = new IdentityHashMap<>();
 
     @Unique
     private final Set<MirrorPipelineSlotKey> mirror$failedMirrorSlots = new HashSet<>();
 
     @Unique
-    private boolean mirror$shaderGenerationFailed;
+    private final Set<ProgramSet> mirror$shaderGenerationFailed =
+            Collections.newSetFromMap(new IdentityHashMap<>());
+
+    @Unique
+    private long mirror$shaderGeneration;
 
     @Unique
     private long mirror$outerFrameSequence;
 
     @Unique
     private int mirror$heavyBuildBudget = 1;
+
+    @Unique
+    private boolean mirror$frameHadMirrorDemand;
+
+    @Unique
+    private ProgramSet mirror$frameDemandProgramSet;
 
     @Inject(method = "preparePipeline", at = @At("HEAD"), cancellable = true,
             require = 1, remap = false)
@@ -97,54 +110,19 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
         callback.setReturnValue(selected);
     }
 
-    @Inject(method = "preparePipeline", at = @At("RETURN"), require = 1, remap = false)
-    private void mirror$prewarmMirrorPipelines(NamespacedId realDimension,
-                                                CallbackInfoReturnable<WorldRenderingPipeline> callback) {
-        if (OculusCompat.isMirrorPass()) return;
-        if (!(callback.getReturnValue() instanceof IrisRenderingPipeline primaryPipeline)) return;
-        mirror$primaryPipelineDimensions.put(primaryPipeline, realDimension);
-        if (mirror$shaderGenerationFailed || !mirror$prewarmInitializedDimensions.add(realDimension)) return;
-
-        int desired = Math.max(1, MirrorConfig.CLIENT.maxRecursionDepth.get())
-                * MirrorCapturePool.shaderBucketCount();
-        Deque<MirrorPipelineState> warmed = mirror$prewarmedPipelines.computeIfAbsent(
-                realDimension, ignored -> new ArrayDeque<>());
-        if (warmed.size() >= desired) return;
-
-        ShaderPack pack = Iris.getCurrentPack().orElse(null);
-        if (pack == null) return;
-        ProgramSet programs = pack.getProgramSet(realDimension);
-
-        while (warmed.size() < desired) {
-            long started = System.nanoTime();
-            try {
-                WorldRenderingPipeline prewarmed = new IrisRenderingPipeline(programs);
-                if (WorldRenderingSettings.INSTANCE.isReloadRequired()) {
-                    WorldRenderingSettings.INSTANCE.clearReloadRequired();
-                }
-                warmed.addLast(new MirrorPipelineState(prewarmed, started, Long.MIN_VALUE));
-                MirrorDiagnostics.pipelinePrewarmed(realDimension, System.nanoTime() - started,
-                        warmed.size(), desired);
-            } catch (RuntimeException failure) {
-                if (WorldRenderingSettings.INSTANCE.isReloadRequired()) {
-                    WorldRenderingSettings.INSTANCE.clearReloadRequired();
-                }
-                // Prewarming is an optimization only. Do not turn an otherwise valid primary
-                // Oculus pipeline into a startup failure; the normal mirror path retains P7's
-                // contained failure handling if this shader cannot support secondary pipelines.
-                Iris.logger.warn("Could not prewarm secondary mirror pipeline {} of {} for dimension {}; "
-                                + "the mirror will fall back to lazy construction",
-                        warmed.size() + 1, desired, realDimension, failure);
-                break;
-            }
-        }
-    }
-
     @Inject(method = "destroyPipeline", at = @At("HEAD"), require = 1, remap = false)
     private void mirror$destroyWithOculus(CallbackInfo callback) {
-        // PipelineManager.destroyPipeline is the sole shader-generation owner. View/resource cache
-        // eviction never reaches this path, so terrain programs are not invalidated redundantly.
-        mirror$destroyMirrorPipelines();
+        boolean shaderReload = Iris.getCurrentPack().isEmpty() || !OculusCompat.isShaderPackInUse();
+        if (!shaderReload) {
+            Iris.logger.info("Keeping {} mirror pipeline slots for shader generation {} across dimension pipeline switch",
+                    mirror$mirrorPipelines.size(), mirror$shaderGeneration);
+            return;
+        }
+
+        Iris.logger.info("Destroying mirror pipeline generation {} for shader reload/pack change", mirror$shaderGeneration);
+        OculusTerrainProgramCacheAccess.clearMirrorPrograms();
+        mirror$destroyMirrorPipelines("shader reload");
+        mirror$shaderGeneration++;
     }
 
     @Override
@@ -161,6 +139,49 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
     public void mirror$beginFrame() {
         mirror$outerFrameSequence++;
         mirror$heavyBuildBudget = 1;
+        mirror$frameHadMirrorDemand = false;
+        mirror$frameDemandProgramSet = null;
+    }
+
+    @Override
+    public void mirror$finishFrame() {
+        if (!mirror$frameHadMirrorDemand) return;
+        ProgramSet programs = mirror$frameDemandProgramSet;
+        mirror$frameHadMirrorDemand = false;
+        mirror$frameDemandProgramSet = null;
+        if (!MirrorConfig.CLIENT.prewarmMirrorPipelines.get() || programs == null
+                || mirror$shaderGenerationFailed.contains(programs) || mirror$heavyBuildBudget <= 0) return;
+
+        Deque<MirrorPassContext.PipelineSlot> queue = mirror$prewarmQueues.get(programs);
+        if (queue == null || queue.isEmpty()) return;
+        MirrorPassContext.PipelineSlot slot;
+        MirrorPipelineSlotKey key;
+        do {
+            slot = queue.removeFirst();
+            key = new MirrorPipelineSlotKey(programs, slot);
+        } while (!queue.isEmpty()
+                && (mirror$mirrorPipelines.containsKey(key) || mirror$failedMirrorSlots.contains(key)));
+        if (mirror$mirrorPipelines.containsKey(key) || mirror$failedMirrorSlots.contains(key)) return;
+
+        mirror$heavyBuildBudget = 0;
+        try {
+            long started = System.nanoTime();
+            WorldRenderingPipeline spare = mirror$constructPipeline(programs, slot,
+                    "lazy spare prewarm", false);
+            mirror$mirrorPipelines.put(key, new MirrorPipelineState(spare, started, Long.MIN_VALUE));
+            Iris.logger.info("Prewarmed mirror pipeline slot {} for shader generation {} after mirror demand",
+                    key.slot(), mirror$shaderGeneration);
+            MirrorDiagnostics.pipelinePrewarmed(key.label(), System.nanoTime() - started,
+                    mirror$mirrorPipelines.size(), mirror$desiredSlotCount());
+        } catch (RuntimeException failure) {
+            if (mirror$isShaderConstructionFailure(failure)) mirror$shaderGenerationFailed.add(programs);
+            else mirror$failedMirrorSlots.add(key);
+            if (WorldRenderingSettings.INSTANCE.isReloadRequired()) {
+                WorldRenderingSettings.INSTANCE.clearReloadRequired();
+            }
+            Iris.logger.warn("Could not prewarm mirror pipeline slot {} for shader generation {}; "
+                            + "the slot remains lazy", slot, mirror$shaderGeneration, failure);
+        }
     }
 
     @Override
@@ -171,62 +192,30 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
             state.markTerrainReady();
             long totalWarmupNanos = System.nanoTime() - state.constructionStartedNanos();
             MirrorDiagnostics.terrainProgramsReady(
-                    entry.getKey().dimension(), entry.getKey().slot(), compileNanos, totalWarmupNanos);
+                    entry.getKey().label(), entry.getKey().slot(), compileNanos, totalWarmupNanos);
             return;
         }
-
-        for (Map.Entry<NamespacedId, Deque<MirrorPipelineState>> entry : mirror$prewarmedPipelines.entrySet()) {
-            for (MirrorPipelineState state : entry.getValue()) {
-                if (state.pipeline() != readyPipeline || state.terrainReady()) continue;
-                state.markTerrainReady();
-                MirrorDiagnostics.terrainProgramsPrewarmed(
-                        entry.getKey(), compileNanos, System.nanoTime() - state.constructionStartedNanos());
-                return;
-            }
-        }
-    }
-
-    @Override
-    public List<WorldRenderingPipeline> mirror$getPrewarmedPipelinesNeedingTerrain(
-            WorldRenderingPipeline primaryPipeline) {
-        NamespacedId dimension = mirror$primaryPipelineDimensions.get(primaryPipeline);
-        if (dimension == null) return List.of();
-        Deque<MirrorPipelineState> states = mirror$prewarmedPipelines.get(dimension);
-        if (states == null || states.isEmpty()) return List.of();
-
-        List<WorldRenderingPipeline> result = new ArrayList<>();
-        for (MirrorPipelineState state : states) {
-            if (!state.terrainReady()) result.add(state.pipeline());
-        }
-        return result;
     }
 
     @Unique
     private WorldRenderingPipeline mirror$prepareSlotPipeline(
             NamespacedId dimension, MirrorPassContext.PipelineSlot slot, String owner) {
-        MirrorPipelineSlotKey key = new MirrorPipelineSlotKey(dimension, slot);
-        if (mirror$shaderGenerationFailed) {
+        ProgramSet programs = mirror$programSetFor(dimension);
+        MirrorPipelineSlotKey key = new MirrorPipelineSlotKey(programs, slot);
+        mirror$frameHadMirrorDemand = true;
+        mirror$frameDemandProgramSet = programs;
+
+        if (mirror$shaderGenerationFailed.contains(programs)) {
             throw new MirrorPipelineUnavailableException(
                     "Oculus shader generation is unavailable for secondary mirror pipelines", null);
         }
         MirrorPipelineState existing = mirror$mirrorPipelines.get(key);
-        if (existing != null) {
-            return existing.pipeline();
-        }
-
-        Deque<MirrorPipelineState> warmed = mirror$prewarmedPipelines.get(dimension);
-        if (warmed != null && !warmed.isEmpty()) {
-            MirrorPipelineState claimed = warmed.removeFirst();
-            if (warmed.isEmpty()) mirror$prewarmedPipelines.remove(dimension);
-            mirror$mirrorPipelines.put(key, claimed);
-            Iris.logger.info("Claiming prewarmed mirror pipeline for dimension {}, resolution {} ({})",
-                    dimension, key.resolution(), owner);
-            return claimed.pipeline();
-        }
+        if (existing != null) return existing.pipeline();
+        mirror$prewarmQueues.computeIfAbsent(programs, ignored -> new ArrayDeque<>()).remove(slot);
 
         if (mirror$failedMirrorSlots.contains(key)) {
             throw new MirrorPipelineUnavailableException(
-                    "Oculus previously failed to create the mirror shader pipeline for " + key, null);
+                    "Oculus previously failed to create the mirror shader pipeline for " + key.label(), null);
         }
         if (WorldRenderingSettings.INSTANCE.isReloadRequired()) {
             throw new MirrorPipelineUnavailableException(
@@ -235,83 +224,198 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
         if (mirror$heavyBuildBudget <= 0) {
             MirrorDiagnostics.recordDeferredPipelineBuild();
             throw new MirrorPipelineUnavailableException(
-                    "Mirror pipeline construction deferred by the per-frame heavyweight build budget for " + key,
+                    "Mirror pipeline construction deferred by the per-frame heavyweight build budget for " + key.slot(),
                     null);
         }
 
         mirror$heavyBuildBudget = 0;
-        Iris.logger.info("Creating mirror pipeline for dimension {}, slot {} ({})", dimension, slot, owner);
+        Iris.logger.info("Creating mirror pipeline for shader generation {}, program set {}, dimension {}, slot {} ({})",
+                mirror$shaderGeneration, key.label(), dimension, slot, owner);
         long constructionStart = System.nanoTime();
         WorldRenderingPipeline selected;
         try {
-            // Do not call PipelineManager's Iris::createPipeline factory here. That wrapper is
-            // intentionally global: on a constructor failure it records a user-facing load error,
-            // marks Iris as fallback and returns Vanilla. Those side effects are correct for the
-            // real world pipeline but catastrophic for an optional secondary mirror pipeline.
-            ShaderPack pack = Iris.getCurrentPack().orElseThrow(() ->
-                    new IllegalStateException("Oculus has no active shader pack for mirror pipeline construction"));
-            ProgramSet programs = pack.getProgramSet(dimension);
-            selected = new IrisRenderingPipeline(programs);
+            selected = mirror$constructPipeline(programs, slot, owner, true);
         } catch (RuntimeException error) {
             boolean shaderFailure = mirror$isShaderConstructionFailure(error);
-            if (shaderFailure) mirror$shaderGenerationFailed = true;
+            if (shaderFailure) mirror$shaderGenerationFailed.add(programs);
             else mirror$failedMirrorSlots.add(key);
             if (WorldRenderingSettings.INSTANCE.isReloadRequired()) {
                 WorldRenderingSettings.INSTANCE.clearReloadRequired();
             }
             if (shaderFailure) {
-                Iris.logger.error("Mirror shader pipeline creation failed for dimension {} and slot {}. " +
-                                "The current shader generation is quarantined for all secondary mirror pipelines.",
-                        dimension, slot, error);
+                Iris.logger.error("Mirror shader pipeline creation failed for program set {} and slot {}. "
+                                + "The current shader generation is quarantined for all secondary mirror pipelines.",
+                        key.label(), slot, error);
             } else {
-                Iris.logger.error("Mirror shader pipeline creation failed for dimension {} and slot {}. " +
-                                "This slot is quarantined until the next shader reload.",
-                        dimension, slot, error);
+                Iris.logger.error("Mirror shader pipeline creation failed for program set {} and slot {}. "
+                                + "This slot is quarantined until the next shader reload.", key.label(), slot, error);
             }
             throw new MirrorPipelineUnavailableException(
-                    "Oculus could not create a secondary mirror shader pipeline for " + key, error);
+                    "Oculus could not create a secondary mirror shader pipeline for " + key.label(), error);
         }
 
-        // A secondary pipeline for the same real dimension must not request a global material-map
-        // rebuild; the world/chunk material mapping itself did not change.
-        if (WorldRenderingSettings.INSTANCE.isReloadRequired()) {
-            WorldRenderingSettings.INSTANCE.clearReloadRequired();
-        }
-
-        long constructedAt = System.nanoTime();
         MirrorPipelineState state = new MirrorPipelineState(
                 selected, constructionStart, mirror$outerFrameSequence);
         mirror$mirrorPipelines.put(key, state);
-        MirrorDiagnostics.pipelineConstructed(dimension, slot, constructedAt - constructionStart);
+        mirror$triggerPrewarm(programs, slot);
+        MirrorDiagnostics.pipelineConstructed(key.label(), slot, System.nanoTime() - constructionStart);
         return selected;
+    }
+
+    @Unique
+    private WorldRenderingPipeline mirror$constructPipeline(ProgramSet programs,
+                                                              MirrorPassContext.PipelineSlot slot,
+                                                              String owner,
+                                                              boolean required) {
+        ShaderPack pack = Iris.getCurrentPack().orElseThrow(() ->
+                new IllegalStateException("Oculus has no active shader pack for mirror pipeline construction"));
+        WorldRenderingPipeline selected = new IrisRenderingPipeline(programs);
+        if (WorldRenderingSettings.INSTANCE.isReloadRequired()) {
+            WorldRenderingSettings.INSTANCE.clearReloadRequired();
+        }
+        return selected;
+    }
+
+    @Unique
+    private void mirror$triggerPrewarm(ProgramSet programs, MirrorPassContext.PipelineSlot currentSlot) {
+        if (!MirrorConfig.CLIENT.prewarmMirrorPipelines.get()
+                || !mirror$prewarmInitialized.add(programs)) return;
+
+        Deque<MirrorPassContext.PipelineSlot> queue = new ArrayDeque<>();
+        int maxDepth = Math.max(1, MirrorConfig.CLIENT.maxRecursionDepth.get());
+        for (int depth = 0; depth < maxDepth; depth++) {
+            for (MirrorPassContext.ResolutionBucket bucket : MirrorCapturePool.shaderBuckets()) {
+                MirrorPassContext.PipelineSlot slot = new MirrorPassContext.PipelineSlot(depth, bucket);
+                if (!slot.equals(currentSlot)) queue.addLast(slot);
+            }
+        }
+        mirror$prewarmQueues.put(programs, queue);
+        Iris.logger.info("Mirror pipeline prewarm triggered by first mirror demand for program set {} "
+                        + "in shader generation {}; {} spare slots queued",
+                new MirrorPipelineSlotKey(programs, currentSlot).label(), mirror$shaderGeneration, queue.size());
+    }
+
+    @Unique
+    private int mirror$desiredSlotCount() {
+        return Math.max(1, MirrorConfig.CLIENT.maxRecursionDepth.get())
+                * MirrorCapturePool.shaderBucketCount();
+    }
+
+    @Unique
+    private ProgramSet mirror$programSetFor(NamespacedId dimension) {
+        ProgramSet cached = mirror$programSetsByDimension.get(dimension);
+        if (cached != null) return cached;
+        ShaderPack pack = Iris.getCurrentPack().orElseThrow(() ->
+                new IllegalStateException("Oculus has no active shader pack for mirror pipeline construction"));
+        ProgramSet candidate = pack.getProgramSet(dimension);
+        for (ProgramSet existing : mirror$programSetGroups) {
+            if (mirror$equivalentProgramSet(existing, candidate)) {
+                mirror$programSetsByDimension.put(dimension, existing);
+                return existing;
+            }
+        }
+        mirror$programSetGroups.add(candidate);
+        mirror$programSetsByDimension.put(dimension, candidate);
+        return candidate;
+    }
+
+    @Unique
+    private boolean mirror$equivalentProgramSet(ProgramSet first, ProgramSet second) {
+        if (first == second) return true;
+        if (first.getPack() != second.getPack()) return false;
+        return mirror$programSetSignature(first).equals(mirror$programSetSignature(second));
+    }
+
+    @Unique
+    private List<String> mirror$programSetSignature(ProgramSet programs) {
+        List<String> cached = mirror$programSetSignatures.get(programs);
+        if (cached != null) return cached;
+        List<String> signature = new ArrayList<>();
+        for (ProgramId id : ProgramId.values()) mirror$appendProgram(signature, programs.get(id).orElse(null));
+        mirror$appendProgramArray(signature, programs.getBegin());
+        mirror$appendProgramArray(signature, programs.getPrepare());
+        mirror$appendProgramArray(signature, programs.getDeferred());
+        mirror$appendProgramArray(signature, programs.getComposite());
+        mirror$appendComputeArray(signature, programs.getSetup());
+        mirror$appendComputeArray(signature, programs.getShadowCompute());
+        mirror$appendComputeArrays(signature, programs.getShadowCompCompute());
+        mirror$appendComputeArrays(signature, programs.getBeginCompute());
+        mirror$appendComputeArrays(signature, programs.getPrepareCompute());
+        mirror$appendComputeArrays(signature, programs.getDeferredCompute());
+        mirror$appendComputeArrays(signature, programs.getCompositeCompute());
+        mirror$appendComputeArray(signature, programs.getFinalCompute());
+        cached = Collections.unmodifiableList(new ArrayList<>(signature));
+        mirror$programSetSignatures.put(programs, cached);
+        return cached;
+    }
+
+    @Unique
+    private static void mirror$appendProgram(List<String> signature, ProgramSource source) {
+        if (source == null) {
+            signature.add(null);
+            return;
+        }
+        signature.add(source.getName());
+        signature.add(source.getVertexSource().orElse(null));
+        signature.add(source.getGeometrySource().orElse(null));
+        signature.add(source.getTessControlSource().orElse(null));
+        signature.add(source.getTessEvalSource().orElse(null));
+        signature.add(source.getFragmentSource().orElse(null));
+    }
+
+    @Unique
+    private static void mirror$appendProgramArray(List<String> signature, ProgramSource[] sources) {
+        if (sources == null) {
+            signature.add(null);
+            return;
+        }
+        signature.add(Integer.toString(sources.length));
+        for (ProgramSource source : sources) mirror$appendProgram(signature, source);
+    }
+
+    @Unique
+    private static void mirror$appendComputeArray(List<String> signature, ComputeSource[] sources) {
+        if (sources == null) {
+            signature.add(null);
+            return;
+        }
+        signature.add(Integer.toString(sources.length));
+        for (ComputeSource source : sources) {
+            if (source == null) signature.add(null);
+            else {
+                signature.add(source.getName());
+                signature.add(source.getSource().orElse(null));
+            }
+        }
+    }
+
+    @Unique
+    private static void mirror$appendComputeArrays(List<String> signature, ComputeSource[][] sources) {
+        if (sources == null) {
+            signature.add(null);
+            return;
+        }
+        signature.add(Integer.toString(sources.length));
+        for (ComputeSource[] source : sources) mirror$appendComputeArray(signature, source);
     }
 
     @Override
     public void mirror$quarantineShaderGeneration(WorldRenderingPipeline failedPipeline, Throwable failure) {
-        if (mirror$shaderGenerationFailed) return;
-
+        ProgramSet failedSet = null;
         MirrorPipelineSlotKey failedKey = null;
         for (Map.Entry<MirrorPipelineSlotKey, MirrorPipelineState> entry : mirror$mirrorPipelines.entrySet()) {
             if (entry.getValue().pipeline() == failedPipeline) {
+                failedSet = entry.getKey().programSet();
                 failedKey = entry.getKey();
                 break;
             }
         }
-
-        // A terrain shader compile/link failure is shader-source/generation scoped rather than a
-        // mirror geometry failure. Disable all secondary pipelines for this generation, but keep the
-        // primary Oculus pipeline alive. Resources are destroyed later by PipelineManager's normal
-        // destroyPipeline lifecycle, never while the failed mirror pipeline is active on the stack.
-        mirror$shaderGenerationFailed = true;
+        if (failedSet == null) return;
+        if (!mirror$shaderGenerationFailed.add(failedSet)) return;
         MirrorDiagnostics.recordLateShaderQuarantine();
-        if (failedKey == null) {
-            Iris.logger.error("Late mirror terrain shader failure. The current Oculus shader generation "
-                    + "is quarantined for secondary mirror pipelines.", failure);
-        } else {
-            Iris.logger.error("Late mirror terrain shader failure for dimension {} and slot {}. The current "
-                            + "Oculus shader generation is quarantined for secondary mirror pipelines.",
-                    failedKey.dimension(), failedKey.slot(), failure);
-        }
+        Iris.logger.error("Late mirror terrain shader failure for program set {} and slot {}; "
+                        + "shader generation {} is quarantined for secondary mirror pipelines.",
+                failedKey.label(), failedKey.slot(), mirror$shaderGeneration, failure);
     }
 
     @Override
@@ -319,17 +423,12 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
         for (Map.Entry<MirrorPipelineSlotKey, MirrorPipelineState> entry : mirror$mirrorPipelines.entrySet()) {
             MirrorPipelineState state = entry.getValue();
             if (state.pipeline() != terrainPipeline || state.terrainReady()) continue;
-
-            // Construction and terrain creation for the same slot may complete in one outer frame.
-            // If this WARMING slot survived from an earlier frame, claim the current frame only when
-            // terrain creation is actually about to happen. This avoids starving other slots when a
-            // mirror currently sees only sky/entities and never asks Embeddium for terrain shaders.
             if (state.heavyWorkFrame() == mirror$outerFrameSequence) return;
             if (mirror$heavyBuildBudget <= 0) {
                 MirrorDiagnostics.recordDeferredPipelineBuild();
                 throw new MirrorPipelineUnavailableException(
                         "Mirror terrain-program warm-up deferred by the per-frame heavyweight build budget for "
-                                + entry.getKey(), null);
+                                + entry.getKey().slot(), null);
             }
             mirror$heavyBuildBudget = 0;
             state.setHeavyWorkFrame(mirror$outerFrameSequence);
@@ -338,10 +437,14 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
     }
 
     @Override
+    public void mirror$markTerrainProgramsNotReady(WorldRenderingPipeline invalidPipeline) {
+        for (MirrorPipelineState state : mirror$mirrorPipelines.values()) {
+            if (state.pipeline() == invalidPipeline) state.markTerrainNotReady();
+        }
+    }
+
+    @Override
     public void mirror$releaseMirrorView(long viewId) {
-        // Full Oculus pipelines are slot-owned, not view-owned. Only invalidate temporal ownership
-        // for the released camera so a later reuse of the same stable view id cannot consume stale
-        // colortex/custom-image contents retained by the long-lived slot.
         for (MirrorPipelineState state : mirror$mirrorPipelines.values()) {
             if (state.pipeline() instanceof MirrorTemporalStateAccess temporalState) {
                 temporalState.mirror$releaseView(viewId);
@@ -350,7 +453,7 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
     }
 
     @Unique
-    private void mirror$destroyMirrorPipelines() {
+    private void mirror$destroyMirrorPipelines(String reason) {
         for (MirrorPipelineState state : mirror$mirrorPipelines.values()) {
             if (state.pipeline() == pipeline) {
                 throw new IllegalStateException("Cannot destroy the active mirror pipeline");
@@ -358,23 +461,22 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
         }
 
         mirror$mirrorPipelines.forEach((key, state) -> {
-            Iris.logger.info("Destroying mirror pipeline for dimension {} and resolution {}",
-                    key.dimension(), key.resolution());
+            Iris.logger.info("Destroying mirror pipeline for shader generation {}, program set {}, slot {} ({})",
+                    mirror$shaderGeneration, key.label(), key.slot(), reason);
+            OculusTerrainProgramCacheAccess.destroyPipeline(state.pipeline());
             state.pipeline().destroy();
         });
-        mirror$prewarmedPipelines.forEach((dimension, states) -> {
-            for (MirrorPipelineState state : states) {
-                Iris.logger.info("Destroying unused prewarmed mirror pipeline for dimension {}", dimension);
-                state.pipeline().destroy();
-            }
-        });
         mirror$mirrorPipelines.clear();
-        mirror$prewarmedPipelines.clear();
-        mirror$prewarmInitializedDimensions.clear();
-        mirror$primaryPipelineDimensions.clear();
+        mirror$prewarmQueues.clear();
+        mirror$prewarmInitialized.clear();
+        mirror$programSetGroups.clear();
+        mirror$programSetsByDimension.clear();
+        mirror$programSetSignatures.clear();
         mirror$failedMirrorSlots.clear();
-        mirror$shaderGenerationFailed = false;
+        mirror$shaderGenerationFailed.clear();
         mirror$heavyBuildBudget = 1;
+        mirror$frameHadMirrorDemand = false;
+        mirror$frameDemandProgramSet = null;
     }
 
     @Unique
@@ -397,5 +499,4 @@ abstract class OculusPipelineManagerMixin implements MirrorPipelineAccess {
         }
         return false;
     }
-
 }

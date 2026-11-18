@@ -146,6 +146,9 @@ public final class MirrorTextureManager {
             MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.STATE_SAVE, saveStart);
             try {
                 renderPending(minecraft, camera, partialTick);
+                // Build at most one spare pipeline while the outer render state is still captured;
+                // Iris pipeline construction mutates framebuffer/texture bindings.
+                OculusCompat.finishMirrorFrame();
             } finally {
                 long restoreStart = MirrorDiagnostics.startTimer();
                 try {

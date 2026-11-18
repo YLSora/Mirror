@@ -5,6 +5,7 @@ import com.mirror.client.MirrorPipelineUnavailableException;
 import com.mirror.client.OculusCompat;
 import com.mirror.client.OculusShaderSourceCompatibility;
 import com.mirror.client.OculusTerrainProgramCacheAccess;
+import com.mirror.client.OculusTerrainProgramCacheStore;
 import com.mirror.client.OculusTerrainProgramState;
 import me.jellysquid.mods.sodium.client.gl.shader.GlProgram;
 import me.jellysquid.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
@@ -29,14 +30,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.EnumMap;
-import java.util.IdentityHashMap;
 import java.util.Locale;
 import java.util.Map;
 
-/**
- * Backports Iris' per-pipeline terrain program selection to Oculus 1.8.0, patches the final
- * Embeddium terrain GLSL source, and contains late secondary-pipeline shader failures.
- */
+/** Backports Iris' per-pipeline terrain program selection to Oculus 1.8.0. */
 @Pseudo
 @Mixin(targets = "net.irisshaders.iris.compat.sodium.impl.shader_overrides.IrisChunkProgramOverrides",
         remap = false)
@@ -53,11 +50,25 @@ abstract class OculusTerrainProgramCacheMixin implements OculusTerrainProgramCac
     private int versionCounterForSodiumShaderReload;
 
     @Unique
-    private final Map<WorldRenderingPipeline, OculusTerrainProgramState> mirror$programsByPipeline =
-            new IdentityHashMap<>();
+    private WorldRenderingPipeline mirror$activePipeline;
 
     @Unique
-    private WorldRenderingPipeline mirror$activePipeline;
+    private ChunkVertexType mirror$activeVertexType;
+
+    @Unique
+    private boolean mirror$activePipelineIsMirror;
+
+    @Unique
+    private WorldRenderingPipeline mirror$primaryPipeline;
+
+    @Unique
+    private ChunkVertexType mirror$primaryVertexType;
+
+    @Unique
+    private EnumMap<IrisTerrainPass, GlProgram<IrisChunkShaderInterface>> mirror$primaryPrograms;
+
+    @Unique
+    private boolean mirror$primaryShadersCreated;
 
     @Unique
     private int mirror$knownGlobalVersion = Integer.MIN_VALUE;
@@ -65,57 +76,42 @@ abstract class OculusTerrainProgramCacheMixin implements OculusTerrainProgramCac
     @Unique
     private long mirror$terrainCreationStartNanos;
 
-    @Unique
-    private boolean mirror$prewarmingSpareTerrainPrograms;
-
-    // P6: TransformPatcher.patchVanilla() is not used for Sodium/Embeddium terrain shaders. Patch
-    // the final source at the last common boundary immediately before each GlShader is compiled.
-    @ModifyArg(method = "createVertexShader",
-            at = @At(value = "INVOKE", target = "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"),
-            index = 2, require = 1, remap = false)
-    private String mirror$patchTerrainVertexSource(String source) {
-        return OculusShaderSourceCompatibility.patch(source);
+    @Inject(method = "<init>", at = @At("RETURN"), require = 1, remap = false)
+    private void mirror$registerCache(CallbackInfo callback) {
+        OculusTerrainProgramCacheAccess.register((OculusTerrainProgramCacheAccess) (Object) this);
     }
 
-    @ModifyArg(method = "createGeometryShader",
-            at = @At(value = "INVOKE", target = "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"),
-            index = 2, require = 1, remap = false)
-    private String mirror$patchTerrainGeometrySource(String source) {
-        return OculusShaderSourceCompatibility.patch(source);
-    }
+    // TransformPatcher.patchVanilla() is not used for Sodium/Embeddium terrain shaders. Patch the
+    // final source immediately before each GlShader is compiled.
+    @ModifyArg(method = "createVertexShader", at = @At(value = "INVOKE", target =
+            "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"), index = 2, require = 1, remap = false)
+    private String mirror$patchTerrainVertexSource(String source) { return OculusShaderSourceCompatibility.patch(source); }
 
-    @ModifyArg(method = "createTessControlShader",
-            at = @At(value = "INVOKE", target = "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"),
-            index = 2, require = 1, remap = false)
-    private String mirror$patchTerrainTessControlSource(String source) {
-        return OculusShaderSourceCompatibility.patch(source);
-    }
+    @ModifyArg(method = "createGeometryShader", at = @At(value = "INVOKE", target =
+            "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"), index = 2, require = 1, remap = false)
+    private String mirror$patchTerrainGeometrySource(String source) { return OculusShaderSourceCompatibility.patch(source); }
 
-    @ModifyArg(method = "createTessEvalShader",
-            at = @At(value = "INVOKE", target = "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"),
-            index = 2, require = 1, remap = false)
-    private String mirror$patchTerrainTessEvalSource(String source) {
-        return OculusShaderSourceCompatibility.patch(source);
-    }
+    @ModifyArg(method = "createTessControlShader", at = @At(value = "INVOKE", target =
+            "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"), index = 2, require = 1, remap = false)
+    private String mirror$patchTerrainTessControlSource(String source) { return OculusShaderSourceCompatibility.patch(source); }
 
-    @ModifyArg(method = "createFragmentShader",
-            at = @At(value = "INVOKE", target = "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"),
-            index = 2, require = 1, remap = false)
-    private String mirror$patchTerrainFragmentSource(String source) {
-        return OculusShaderSourceCompatibility.patch(source);
-    }
+    @ModifyArg(method = "createTessEvalShader", at = @At(value = "INVOKE", target =
+            "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"), index = 2, require = 1, remap = false)
+    private String mirror$patchTerrainTessEvalSource(String source) { return OculusShaderSourceCompatibility.patch(source); }
+
+    @ModifyArg(method = "createFragmentShader", at = @At(value = "INVOKE", target =
+            "Lme/jellysquid/mods/sodium/client/gl/shader/GlShader;<init>(Lme/jellysquid/mods/sodium/client/gl/shader/ShaderType;Lnet/minecraft/resources/ResourceLocation;Ljava/lang/String;)V"), index = 2, require = 1, remap = false)
+    private String mirror$patchTerrainFragmentSource(String source) { return OculusShaderSourceCompatibility.patch(source); }
 
     @Inject(method = "createShaders", at = @At("HEAD"), require = 1, remap = false)
     private void mirror$beginTerrainProgramCreation(SodiumTerrainPipeline terrainPipeline,
                                                      ChunkVertexType vertexType,
                                                      CallbackInfo callback) {
         mirror$terrainCreationStartNanos = 0L;
-        if (mirror$prewarmingSpareTerrainPrograms || !OculusCompat.isMirrorPass()) return;
+        if (!OculusCompat.isMirrorPass()) return;
 
         WorldRenderingPipeline current = Iris.getPipelineManager().getPipelineNullable();
         if (current != null && Iris.getPipelineManager() instanceof MirrorPipelineAccess access) {
-            // Claim the budget at the actual expensive boundary, not merely because a WARMING
-            // pipeline was selected. This prevents sky-only mirror views from starving other slots.
             access.mirror$beginTerrainProgramBuild(current);
         }
         mirror$terrainCreationStartNanos = System.nanoTime();
@@ -125,88 +121,24 @@ abstract class OculusTerrainProgramCacheMixin implements OculusTerrainProgramCac
     private void mirror$finishTerrainProgramCreation(SodiumTerrainPipeline terrainPipeline,
                                                       ChunkVertexType vertexType,
                                                       CallbackInfo callback) {
-        if (mirror$prewarmingSpareTerrainPrograms) return;
-
         long started = mirror$terrainCreationStartNanos;
         mirror$terrainCreationStartNanos = 0L;
-        if (started != 0L && OculusCompat.isMirrorPass()) {
-            WorldRenderingPipeline current = Iris.getPipelineManager().getPipelineNullable();
-            if (current != null && Iris.getPipelineManager() instanceof MirrorPipelineAccess access) {
-                access.mirror$markTerrainProgramsReady(current, System.nanoTime() - started);
-            }
-            return;
-        }
+        if (started == 0L || !OculusCompat.isMirrorPass()) return;
 
-        // The primary terrain programs are created during normal shader/world startup. Use that
-        // already-expensive initialization boundary to finish the spare mirror programs as well,
-        // so the first visible mirror does not pay lazy terrain compilation on a live frame.
-        if (!OculusCompat.isMirrorPass()) {
-            mirror$prewarmSpareTerrainPrograms(vertexType);
+        WorldRenderingPipeline current = Iris.getPipelineManager().getPipelineNullable();
+        if (current != null && mirror$activeVertexType != null
+                && Iris.getPipelineManager() instanceof MirrorPipelineAccess access) {
+            access.mirror$markTerrainProgramsReady(current, System.nanoTime() - started);
         }
     }
 
-    @Unique
-    private void mirror$prewarmSpareTerrainPrograms(ChunkVertexType vertexType) {
-        if (!(Iris.getPipelineManager() instanceof MirrorPipelineAccess access)) return;
-        WorldRenderingPipeline primaryPipeline = Iris.getPipelineManager().getPipelineNullable();
-        if (primaryPipeline == null) return;
-        java.util.List<WorldRenderingPipeline> prewarmed =
-                access.mirror$getPrewarmedPipelinesNeedingTerrain(primaryPipeline);
-        if (prewarmed.isEmpty()) return;
-
-        IrisChunkProgramOverrides target = (IrisChunkProgramOverrides) (Object) this;
-        EnumMap<IrisTerrainPass, GlProgram<IrisChunkShaderInterface>> primaryPrograms = programs;
-        boolean primaryShadersCreated = shadersCreated;
-        WorldRenderingPipeline primaryActivePipeline = mirror$activePipeline;
-
-        try {
-            for (WorldRenderingPipeline spare : prewarmed) {
-                programs = new EnumMap<>(IrisTerrainPass.class);
-                shadersCreated = false;
-                mirror$activePipeline = spare;
-                long started = System.nanoTime();
-                try {
-                    mirror$prewarmingSpareTerrainPrograms = true;
-                    target.createShaders(spare.getSodiumTerrainPipeline(), vertexType);
-                    long elapsed = System.nanoTime() - started;
-                    mirror$programsByPipeline.put(spare,
-                            new OculusTerrainProgramState(programs, shadersCreated));
-                    access.mirror$markTerrainProgramsReady(spare, elapsed);
-                } catch (RuntimeException failure) {
-                    mirror$deletePrograms(programs);
-                    programs = new EnumMap<>(IrisTerrainPass.class);
-                    shadersCreated = false;
-                    if (mirror$isShaderCompileOrLinkFailure(failure)) {
-                        access.mirror$quarantineShaderGeneration(spare, failure);
-                        Iris.logger.error("Prewarmed mirror terrain shader compilation failed; "
-                                + "secondary mirror pipelines are quarantined for this shader generation",
-                                failure);
-                        break;
-                    }
-                    Iris.logger.warn("Could not prewarm mirror terrain programs; "
-                            + "falling back to lazy mirror terrain creation", failure);
-                    break;
-                } finally {
-                    mirror$prewarmingSpareTerrainPrograms = false;
-                }
-            }
-        } finally {
-            programs = primaryPrograms;
-            shadersCreated = primaryShadersCreated;
-            mirror$activePipeline = primaryActivePipeline;
-        }
-    }
-
-    // P7: createShaders is lazy and can fail well after IrisRenderingPipeline construction. Guard
-    // only this optional mirror invocation. Main-world terrain compilation remains untouched.
-    @Redirect(method = "getProgramOverride",
-            at = @At(value = "INVOKE",
-                    target = "Lnet/irisshaders/iris/compat/sodium/impl/shader_overrides/IrisChunkProgramOverrides;createShaders(Lnet/irisshaders/iris/pipeline/SodiumTerrainPipeline;Lme/jellysquid/mods/sodium/client/render/chunk/vertex/format/ChunkVertexType;)V"),
-            require = 1, remap = false)
-    private void mirror$guardLateTerrainShaderCreation(
-            IrisChunkProgramOverrides instance,
-            SodiumTerrainPipeline terrainPipeline,
-            ChunkVertexType vertexType) {
+    // createShaders() is lazy and can fail well after IrisRenderingPipeline construction. Guard only
+    // this optional mirror invocation; main-world terrain compilation remains untouched.
+    @Redirect(method = "getProgramOverride", at = @At(value = "INVOKE", target =
+            "Lnet/irisshaders/iris/compat/sodium/impl/shader_overrides/IrisChunkProgramOverrides;createShaders(Lnet/irisshaders/iris/pipeline/SodiumTerrainPipeline;Lme/jellysquid/mods/sodium/client/render/chunk/vertex/format/ChunkVertexType;)V"), require = 1, remap = false)
+    private void mirror$guardLateTerrainShaderCreation(IrisChunkProgramOverrides instance,
+                                                        SodiumTerrainPipeline terrainPipeline,
+                                                        ChunkVertexType vertexType) {
         if (!OculusCompat.isMirrorPass()) {
             instance.createShaders(terrainPipeline, vertexType);
             return;
@@ -216,10 +148,6 @@ abstract class OculusTerrainProgramCacheMixin implements OculusTerrainProgramCac
             instance.createShaders(terrainPipeline, vertexType);
         } catch (RuntimeException failure) {
             if (!mirror$isShaderCompileOrLinkFailure(failure)) throw failure;
-
-            // A failed createShaders() can leave successfully linked passes from earlier enum values
-            // in the active map. Delete only this active/failed pipeline's partial programs before
-            // unwinding; inactive primary-pipeline programs remain stored in programsByPipeline.
             mirror$deletePrograms(programs);
             programs = new EnumMap<>(IrisTerrainPass.class);
             shadersCreated = false;
@@ -239,40 +167,122 @@ abstract class OculusTerrainProgramCacheMixin implements OculusTerrainProgramCac
                                                 CallbackInfoReturnable<GlProgram<IrisChunkShaderInterface>> callback) {
         int globalVersion = Iris.getPipelineManager().getVersionCounterForSodiumShaderReload();
         if (mirror$knownGlobalVersion != globalVersion) {
-            mirror$deletePrograms(programs);
-            mirror$programsByPipeline.values().forEach(state -> mirror$deletePrograms(state.programs()));
-            mirror$programsByPipeline.clear();
+            // PipelineManager increments this counter for dimension switches as well as shader
+            // reloads. Keep live mirror programs in the process cache across the former, but
+            // dispose all primary programs because this override instance is no longer valid.
+            mirror$storeActiveMirrorPrograms();
+            mirror$storeActivePrimaryPrograms();
+            mirror$deletePrimaryPrograms();
             programs = new EnumMap<>(IrisTerrainPass.class);
             shadersCreated = false;
             versionCounterForSodiumShaderReload = globalVersion;
             mirror$activePipeline = null;
+            mirror$activeVertexType = null;
+            mirror$activePipelineIsMirror = false;
             mirror$knownGlobalVersion = globalVersion;
         }
 
         WorldRenderingPipeline current = Iris.getPipelineManager().getPipelineNullable();
-        if (current == mirror$activePipeline) return;
+        boolean mirrorPass = OculusCompat.isMirrorPass();
+        if (current == mirror$activePipeline && vertexType == mirror$activeVertexType
+                && mirrorPass == mirror$activePipelineIsMirror) return;
 
-        if (mirror$activePipeline != null) {
-            mirror$programsByPipeline.put(mirror$activePipeline,
-                    new OculusTerrainProgramState(programs, shadersCreated));
-        }
+        mirror$storeActiveMirrorPrograms();
+        mirror$storeActivePrimaryPrograms();
 
-        OculusTerrainProgramState selected = mirror$programsByPipeline.remove(current);
-        if (selected == null) {
+        if (mirrorPass && current != null) {
+            OculusTerrainProgramCacheStore.Lookup<OculusTerrainProgramState> lookup =
+                    OculusTerrainProgramCacheAccess.take(current, vertexType);
+            if (lookup.vertexTypeMismatch()
+                    && Iris.getPipelineManager() instanceof MirrorPipelineAccess access) {
+                access.mirror$markTerrainProgramsNotReady(current);
+            }
+            OculusTerrainProgramState selected = lookup.value();
+            if (selected == null) {
+                programs = new EnumMap<>(IrisTerrainPass.class);
+                shadersCreated = false;
+            } else {
+                programs = selected.programs();
+                shadersCreated = selected.shadersCreated();
+            }
+        } else if (!mirrorPass && current == mirror$primaryPipeline
+                && vertexType == mirror$primaryVertexType && mirror$primaryPrograms != null) {
+            programs = mirror$primaryPrograms;
+            shadersCreated = mirror$primaryShadersCreated;
+        } else {
+            if (!mirrorPass && current != mirror$primaryPipeline) mirror$deletePrimaryPrograms();
             programs = new EnumMap<>(IrisTerrainPass.class);
             shadersCreated = false;
-        } else {
-            programs = selected.programs();
-            shadersCreated = selected.shadersCreated();
         }
+
         versionCounterForSodiumShaderReload = globalVersion;
         mirror$activePipeline = current;
+        mirror$activeVertexType = vertexType;
+        mirror$activePipelineIsMirror = mirrorPass;
     }
 
     @Inject(method = "deleteShaders", at = @At("HEAD"), require = 1, remap = false)
-    private void mirror$deleteInactivePrograms(CallbackInfo callback) {
-        mirror$programsByPipeline.values().forEach(state -> mirror$deletePrograms(state.programs()));
-        mirror$programsByPipeline.clear();
+    private void mirror$preserveMirrorProgramsBeforeDelete(CallbackInfo callback) {
+        // Embeddium destroys this override object during every chunk-renderer rebuild. Give the
+        // original deleteShaders() the primary map when the active pipeline is mirror, so primary
+        // programs are deleted exactly once while mirror programs survive in the process cache.
+        if (!mirror$activePipelineIsMirror) return;
+        mirror$storeActiveMirrorPrograms();
+        programs = mirror$primaryPrograms == null
+                ? new EnumMap<>(IrisTerrainPass.class) : mirror$primaryPrograms;
+        shadersCreated = mirror$primaryShadersCreated;
+        mirror$primaryPrograms = null;
+        mirror$primaryPipeline = null;
+        mirror$primaryVertexType = null;
+        mirror$activePipeline = null;
+        mirror$activeVertexType = null;
+        mirror$activePipelineIsMirror = false;
+        mirror$terrainCreationStartNanos = 0L;
+    }
+
+    @Override
+    public void mirror$clearMirrorPrograms() {
+        // The static lifecycle entry clears the process cache first. This only deletes the current
+        // active mirror map; primary programs remain under Oculus' normal pipeline lifecycle.
+        if (mirror$activePipelineIsMirror) {
+            mirror$deletePrograms(programs);
+            programs = new EnumMap<>(IrisTerrainPass.class);
+            shadersCreated = false;
+        }
+        mirror$activePipeline = null;
+        mirror$activeVertexType = null;
+        mirror$activePipelineIsMirror = false;
+        mirror$terrainCreationStartNanos = 0L;
+    }
+
+    @Unique
+    private void mirror$storeActiveMirrorPrograms() {
+        if (!mirror$activePipelineIsMirror || mirror$activePipeline == null || mirror$activeVertexType == null) return;
+        OculusTerrainProgramCacheAccess.put(
+                mirror$activePipeline, mirror$activeVertexType, programs, shadersCreated);
+    }
+
+    @Unique
+    private void mirror$storeActivePrimaryPrograms() {
+        if (mirror$activePipelineIsMirror || mirror$activePipeline == null) return;
+        if (mirror$primaryPrograms != null && mirror$primaryPrograms != programs) {
+            mirror$deletePrograms(mirror$primaryPrograms);
+        }
+        mirror$primaryPipeline = mirror$activePipeline;
+        mirror$primaryVertexType = mirror$activeVertexType;
+        mirror$primaryPrograms = programs;
+        mirror$primaryShadersCreated = shadersCreated;
+    }
+
+    @Unique
+    private void mirror$deletePrimaryPrograms() {
+        if (mirror$primaryPrograms != null) {
+            mirror$deletePrograms(mirror$primaryPrograms);
+            mirror$primaryPrograms = null;
+        }
+        mirror$primaryPipeline = null;
+        mirror$primaryVertexType = null;
+        mirror$primaryShadersCreated = false;
     }
 
     @Unique
@@ -305,5 +315,4 @@ abstract class OculusTerrainProgramCacheMixin implements OculusTerrainProgramCac
         }
         values.clear();
     }
-
 }

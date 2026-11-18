@@ -51,6 +51,11 @@ public final class OculusCompat {
         if (LOADED && RUNTIME != null) runtime().beginMirrorFrame();
     }
 
+    /** Finishes a real outer frame after all mirror demand has had priority. */
+    public static void finishMirrorFrame() {
+        if (LOADED && RUNTIME != null) runtime().finishMirrorFrame();
+    }
+
     /** Releases Oculus state scoped to one persistent reflected-camera view. */
     public static void releaseMirrorView(long viewId) {
         if (LOADED && RUNTIME != null) runtime().releaseMirrorView(viewId);
@@ -88,6 +93,8 @@ public final class OculusCompat {
         void initialize();
 
         void beginMirrorFrame();
+
+        void finishMirrorFrame();
 
         void releaseMirrorView(long viewId);
 

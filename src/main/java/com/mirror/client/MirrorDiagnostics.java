@@ -276,13 +276,13 @@ public final class MirrorDiagnostics {
 
     public static void pipelinePrewarmed(Object dimension, long elapsedNanos, int index, int total) {
         if (!isDebugEnabled()) return;
-        LOGGER.info("[Mirror diagnostics] Prewarmed mirror pipeline {}/{} for dimension {} in {} ms",
+        LOGGER.info("[Mirror diagnostics] Prewarmed mirror pipeline {}/{} for program set {} in {} ms",
                 index, total, dimension, formatMillis(nanosToMillis(elapsedNanos)));
     }
 
     public static void terrainProgramsPrewarmed(Object dimension, long compileNanos, long totalWarmupNanos) {
         if (!isDebugEnabled()) return;
-        LOGGER.info("[Mirror diagnostics] Prewarmed mirror terrain programs for dimension {} in {} ms; "
+        LOGGER.info("[Mirror diagnostics] Prewarmed mirror terrain programs for program set {} in {} ms; "
                         + "pipeline total warm-up {} ms",
                 dimension, formatMillis(nanosToMillis(compileNanos)),
                 formatMillis(nanosToMillis(totalWarmupNanos)));
@@ -291,7 +291,7 @@ public final class MirrorDiagnostics {
     public static void pipelineConstructed(Object dimension, MirrorPassContext.PipelineSlot slot,
                                            long elapsedNanos) {
         if (!isDebugEnabled()) return;
-        LOGGER.info("[Mirror diagnostics] Constructed mirror pipeline for dimension {}, slot {} in {} ms; "
+        LOGGER.info("[Mirror diagnostics] Constructed mirror pipeline for program set {}, slot {} in {} ms; "
                         + "terrain programs are still warming",
                 dimension, slot, formatMillis(nanosToMillis(elapsedNanos)));
     }
@@ -299,7 +299,7 @@ public final class MirrorDiagnostics {
     public static void terrainProgramsReady(Object dimension, MirrorPassContext.PipelineSlot slot,
                                             long compileNanos, long totalWarmupNanos) {
         if (!isDebugEnabled()) return;
-        LOGGER.info("[Mirror diagnostics] Mirror pipeline READY for dimension {}, slot {}: terrain programs {} ms, "
+        LOGGER.info("[Mirror diagnostics] Mirror pipeline READY for program set {}, slot {}: terrain programs {} ms, "
                         + "total slot warm-up {} ms",
                 dimension, slot, formatMillis(nanosToMillis(compileNanos)),
                 formatMillis(nanosToMillis(totalWarmupNanos)));

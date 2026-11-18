@@ -37,6 +37,11 @@ public final class MirrorPipelineState {
         terrainReady = true;
     }
 
+    public void markTerrainNotReady() {
+        terrainReady = false;
+        heavyWorkFrame = Long.MIN_VALUE;
+    }
+
     public long heavyWorkFrame() {
         return heavyWorkFrame;
     }

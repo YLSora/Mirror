@@ -47,6 +47,15 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
     }
 
     @Override
+    public void finishMirrorFrame() {
+        PipelineManager manager = Iris.getPipelineManager();
+        if (!(manager instanceof MirrorPipelineAccess access)) {
+            throw new IllegalStateException("Mirror PipelineManager state access is unavailable");
+        }
+        access.mirror$finishFrame();
+    }
+
+    @Override
     public void releaseMirrorView(long viewId) {
         PipelineManager manager = Iris.getPipelineManager();
         if (!(manager instanceof MirrorPipelineAccess access)) {

@@ -5,6 +5,7 @@ import org.lwjgl.opengl.GL11C;
 import com.mirror.compat.ThirdPartyFrame;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -44,6 +45,12 @@ public final class MirrorCapturePool {
     /** Number of shader capacity slots that should be warmed for each recursion depth. */
     public static int shaderBucketCount() {
         return SHADER_BUCKETS.length;
+    }
+
+    public static List<MirrorPassContext.ResolutionBucket> shaderBuckets() {
+        return java.util.Arrays.stream(SHADER_BUCKETS)
+                .mapToObj(size -> new MirrorPassContext.ResolutionBucket(size, size))
+                .toList();
     }
 
     public static CaptureSlot acquire(int recursionDepth, int requestedWidth, int requestedHeight) {

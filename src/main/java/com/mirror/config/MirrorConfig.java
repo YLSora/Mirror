@@ -68,6 +68,7 @@ public final class MirrorConfig {
         public final ForgeConfigSpec.BooleanValue smoothSampling;
         public final ForgeConfigSpec.EnumValue<RecursionMode> recursionMode;
         public final ForgeConfigSpec.IntValue maxRecursionDepth;
+        public final ForgeConfigSpec.BooleanValue prewarmMirrorPipelines;
         public final ForgeConfigSpec.DoubleValue recursiveResolutionDecay;
         public final ForgeConfigSpec.DoubleValue reflectionFrameBudgetMs;
         public final ForgeConfigSpec.IntValue maxRecursiveViews;
@@ -94,6 +95,10 @@ public final class MirrorConfig {
                             "最大总反射次数，包含直接镜子 pass。1 表示仅直接反射；最高 8 允许更深的镜中镜反射。")
                     .translation("mirror.config.maxRecursionDepth")
                     .defineInRange("maxRecursionDepth", 2, 1, 8);
+            prewarmMirrorPipelines = builder.comment(
+                            "首次出现镜面渲染请求后，按每帧最多一个重型构建逐步预热剩余光影管线；关闭后完全按需构建。")
+                    .translation("mirror.config.prewarmMirrorPipelines")
+                    .define("prewarmMirrorPipelines", true);
             recursiveResolutionDecay = builder.comment(
                             "子反射相对父捕获中实际投影像素的线性密度倍率，从第一层镜中镜开始每层应用一次。")
                     .translation("mirror.config.recursiveResolutionDecay")
