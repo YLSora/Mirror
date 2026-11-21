@@ -270,27 +270,36 @@ public final class MirrorLevelRenderer {
                 MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.WORLD_PREPARE, prepareStart);
                 long restoreStart = MirrorDiagnostics.startTimer();
                 try {
-                    if (cullState != null) cullState.close();
-                    if (deferredSurfaces != null) deferredSurfaces.close();
-                    if (framePushed) {
-                        RenderFrame popped = RENDER_STACK.pop();
-                        if (popped != frame) {
-                            throw new IllegalStateException("Mirror render frames closed out of order");
+                    try (DeferredMirrorSurfaceRenderer.PassScope surfaces = deferredSurfaces;
+                         MirrorLevelRendererHooks.State culling = cullState) {
+                        // Close both scopes before restoring the outer renderer.
+                    } finally {
+                        try {
+                            if (framePushed && RENDER_STACK.pop() != frame) {
+                                throw new IllegalStateException("Mirror render frames closed out of order");
+                            }
+                        } finally {
+                            minecraft.smartCull = oldSmartCull;
+                            try {
+                                if (minecraftAccess != null) minecraftAccess.mirror$setMainRenderTarget(mainTarget);
+                            } finally {
+                                // Iris' target listener must see the outer pipeline before restoring bindings.
+                                try {
+                                    oculusState.close();
+                                } finally {
+                                    renderState.restore();
+                                    if (rendererAccess != null) {
+                                        rendererAccess.mirror$setRenderDistance(oldRenderDistance);
+                                        rendererAccess.mirror$setMainCamera(previousMainCamera);
+                                    }
+                                    blockEntityDispatcher.prepare(level, previousMainCamera, minecraft.hitResult);
+                                    entityRenderDispatcher.prepare(level, previousMainCamera, minecraft.crosshairPickEntity);
+                                    mainTarget.bindWrite(true);
+                                    RenderSystem.viewport(0, 0, mainTarget.width, mainTarget.height);
+                                }
+                            }
                         }
                     }
-                    minecraft.smartCull = oldSmartCull;
-                    if (minecraftAccess != null) minecraftAccess.mirror$setMainRenderTarget(mainTarget);
-                    // Iris' RenderTarget listener must see the outer pipeline before binding it.
-                    oculusState.close();
-                    renderState.restore();
-                    if (rendererAccess != null) {
-                        rendererAccess.mirror$setRenderDistance(oldRenderDistance);
-                        rendererAccess.mirror$setMainCamera(previousMainCamera);
-                    }
-                    blockEntityDispatcher.prepare(level, previousMainCamera, minecraft.hitResult);
-                    entityRenderDispatcher.prepare(level, previousMainCamera, minecraft.crosshairPickEntity);
-                    mainTarget.bindWrite(true);
-                    RenderSystem.viewport(0, 0, mainTarget.width, mainTarget.height);
                 } finally {
                     MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.STATE_RESTORE, restoreStart);
                 }

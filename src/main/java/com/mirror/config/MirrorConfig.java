@@ -68,7 +68,12 @@ public final class MirrorConfig {
         public final ForgeConfigSpec.BooleanValue smoothSampling;
         public final ForgeConfigSpec.EnumValue<RecursionMode> recursionMode;
         public final ForgeConfigSpec.IntValue maxRecursionDepth;
-        public final ForgeConfigSpec.BooleanValue prewarmMirrorPipelines;
+        public final ForgeConfigSpec.IntValue maxShaderMirrorPipelines;
+        public final ForgeConfigSpec.BooleanValue prewarmRecursiveMirrorPipelines;
+        public final ForgeConfigSpec.BooleanValue shareShadowTargetsWithPrimary;
+        public final ForgeConfigSpec.BooleanValue shareCustomTexturesWithPrimary;
+        public final ForgeConfigSpec.BooleanValue shareCustomImagesWithPrimary;
+        public final ForgeConfigSpec.DoubleValue shaderCaptureShrinkDelaySeconds;
         public final ForgeConfigSpec.DoubleValue recursiveResolutionDecay;
         public final ForgeConfigSpec.DoubleValue reflectionFrameBudgetMs;
         public final ForgeConfigSpec.IntValue maxRecursiveViews;
@@ -95,10 +100,24 @@ public final class MirrorConfig {
                             "最大总反射次数，包含直接镜子 pass。1 表示仅直接反射；最高 8 允许更深的镜中镜反射。")
                     .translation("mirror.config.maxRecursionDepth")
                     .defineInRange("maxRecursionDepth", 2, 1, 8);
-            prewarmMirrorPipelines = builder.comment(
-                            "首次出现镜面渲染请求后，按每帧最多一个重型构建逐步预热剩余光影管线；关闭后完全按需构建。")
-                    .translation("mirror.config.prewarmMirrorPipelines")
-                    .define("prewarmMirrorPipelines", true);
+            maxShaderMirrorPipelines = builder.comment("光影下镜面管线总数上限；达到上限后更深层复用父层镜面画面，仍保持光影渲染。")
+                    .translation("mirror.config.maxShaderMirrorPipelines")
+                    .defineInRange("maxShaderMirrorPipelines", 2, 1, 8);
+            prewarmRecursiveMirrorPipelines = builder.comment("进入世界或切换光影时，是否与直接镜面一起预建镜中镜管线。")
+                    .translation("mirror.config.prewarmRecursiveMirrorPipelines")
+                    .define("prewarmRecursiveMirrorPipelines", false);
+            shareShadowTargetsWithPrimary = builder.comment("镜面光影管线借用主管线的阴影贴图；不兼容时会自动独立分配。")
+                    .translation("mirror.config.shareShadowTargetsWithPrimary")
+                    .define("shareShadowTargetsWithPrimary", true);
+            shareCustomTexturesWithPrimary = builder.comment("镜面光影管线借用主管线的自定义纹理；不兼容时会自动独立分配。")
+                    .translation("mirror.config.shareCustomTexturesWithPrimary")
+                    .define("shareCustomTexturesWithPrimary", true);
+            shareCustomImagesWithPrimary = builder.comment("镜面光影管线共享主管线中只读的绝对尺寸自定义图像；写入或不兼容时会自动独立分配。")
+                    .translation("mirror.config.shareCustomImagesWithPrimary")
+                    .define("shareCustomImagesWithPrimary", true);
+            shaderCaptureShrinkDelaySeconds = builder.comment("镜面采集尺寸缩小前需要持续保持较低需求的时间（秒）；放大立即生效。")
+                    .translation("mirror.config.shaderCaptureShrinkDelaySeconds")
+                    .defineInRange("shaderCaptureShrinkDelaySeconds", 5.0D, 0.0D, 60.0D);
             recursiveResolutionDecay = builder.comment(
                             "子反射相对父捕获中实际投影像素的线性密度倍率，从第一层镜中镜开始每层应用一次。")
                     .translation("mirror.config.recursiveResolutionDecay")

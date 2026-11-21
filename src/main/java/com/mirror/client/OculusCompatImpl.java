@@ -40,28 +40,39 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
     @Override
     public void beginMirrorFrame() {
         PipelineManager manager = Iris.getPipelineManager();
-        if (!(manager instanceof MirrorPipelineAccess access)) {
-            throw new IllegalStateException("Mirror PipelineManager state access is unavailable");
-        }
-        access.mirror$beginFrame();
+        if (manager instanceof MirrorPipelineAccess access) access.mirror$beginFrame();
+        else MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.NO_SHADER_CAPTURE);
     }
 
     @Override
-    public void finishMirrorFrame() {
+    public void sealLayerSizes() {
         PipelineManager manager = Iris.getPipelineManager();
-        if (!(manager instanceof MirrorPipelineAccess access)) {
-            throw new IllegalStateException("Mirror PipelineManager state access is unavailable");
-        }
-        access.mirror$finishFrame();
+        if (manager instanceof MirrorPipelineAccess access) access.mirror$sealLayerSizes();
+        else MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.NO_SHADER_CAPTURE);
+    }
+
+    @Override
+    public boolean requestShaderLayerSize(int depth, int size) {
+        PipelineManager manager = Iris.getPipelineManager();
+        return manager instanceof MirrorPipelineAccess access && access.mirror$requestLayerSize(depth, size);
+    }
+
+    @Override
+    public int shaderLayerSize(int depth) {
+        PipelineManager manager = Iris.getPipelineManager();
+        return manager instanceof MirrorPipelineAccess access ? access.mirror$getLayerSize(depth) : 0;
+    }
+
+    @Override
+    public void clearShaderMirrorPipelines() {
+        PipelineManager manager = Iris.getPipelineManager();
+        if (manager instanceof MirrorPipelineAccess access) access.mirror$logout();
     }
 
     @Override
     public void releaseMirrorView(long viewId) {
         PipelineManager manager = Iris.getPipelineManager();
-        if (!(manager instanceof MirrorPipelineAccess access)) {
-            throw new IllegalStateException("Mirror PipelineManager state access is unavailable");
-        }
-        access.mirror$releaseMirrorView(viewId);
+        if (manager instanceof MirrorPipelineAccess access) access.mirror$releaseMirrorView(viewId);
     }
 
     @Override
@@ -72,6 +83,11 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
         // world pipeline with its vanilla fallback. Treat only a real IrisRenderingPipeline as
         // shader-active so mirrors do not retry the same failed pack for every slot/view.
         return current instanceof IrisRenderingPipeline;
+    }
+
+    @Override
+    public boolean hasSelectedShaderPack() {
+        return Iris.getCurrentPack().isPresent();
     }
 
     @Override
@@ -244,11 +260,13 @@ public final class OculusCompatImpl implements OculusCompat.Runtime {
                 ImmediateState.usingTessellation = outerUsingTessellation;
                 ImmediateState.renderWithExtendedVertexFormat = outerExtendedVertexFormat;
                 Minecraft.getInstance().smartCull = outerSmartCull;
-                levelAccess.mirror$setPipeline(outerLevelPipeline);
-                pipelineAccess.mirror$setPipeline(outerManagerPipeline);
             } finally {
-                if (entered) {
-                    OculusCompat.endMirrorTransaction();
+                pipelineAccess.mirror$setPipeline(outerManagerPipeline);
+                try {
+                    levelAccess.mirror$setPipeline(outerLevelPipeline);
+                    if (outerManagerPipeline instanceof MirrorTemporalStateAccess state) state.mirror$bindStorageBuffers();
+                } finally {
+                    if (entered) OculusCompat.endMirrorTransaction();
                 }
             }
         }

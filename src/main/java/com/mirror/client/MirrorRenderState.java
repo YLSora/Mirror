@@ -48,7 +48,7 @@ public final class MirrorRenderState {
     private final int pixelUnpackBuffer;
     private final int drawFramebuffer;
     private final int readFramebuffer;
-    private final int drawBuffer;
+    private final int[] drawBuffers;
     private final int readBuffer;
     private final int activeTexture;
     private final int[] textures;
@@ -113,7 +113,10 @@ public final class MirrorRenderState {
         pixelUnpackBuffer = GL21C.glGetInteger(GL21C.GL_PIXEL_UNPACK_BUFFER_BINDING);
         drawFramebuffer = GL30C.glGetInteger(GL30C.GL_DRAW_FRAMEBUFFER_BINDING);
         readFramebuffer = GL30C.glGetInteger(GL30C.GL_READ_FRAMEBUFFER_BINDING);
-        drawBuffer = GL11C.glGetInteger(GL11C.GL_DRAW_BUFFER);
+        drawBuffers = new int[drawFramebuffer == 0 ? 1 : GL11C.glGetInteger(GL20C.GL_MAX_DRAW_BUFFERS)];
+        for (int i = 0; i < drawBuffers.length; i++) {
+            drawBuffers[i] = GL11C.glGetInteger(GL20C.GL_DRAW_BUFFER0 + i);
+        }
         readBuffer = GL11C.glGetInteger(GL11C.GL_READ_BUFFER);
         activeTexture = GL11C.glGetInteger(GL13C.GL_ACTIVE_TEXTURE);
         // VertexBuffer copies all twelve RenderSystem shader-texture slots into every vanilla
@@ -173,7 +176,8 @@ public final class MirrorRenderState {
         GlStateManager._glBindBuffer(GL21C.GL_PIXEL_UNPACK_BUFFER, pixelUnpackBuffer);
         GL30C.glBindFramebuffer(GL30C.GL_DRAW_FRAMEBUFFER, drawFramebuffer);
         GL30C.glBindFramebuffer(GL30C.GL_READ_FRAMEBUFFER, readFramebuffer);
-        GL11C.glDrawBuffer(drawBuffer);
+        if (drawFramebuffer == 0) GL11C.glDrawBuffer(drawBuffers[0]);
+        else GL20C.glDrawBuffers(drawBuffers);
         GL11C.glReadBuffer(readBuffer);
         RenderSystem.setProjectionMatrix(projection, vertexSorting);
         restoreRenderSystemField("savedProjectionMatrix", savedProjection);

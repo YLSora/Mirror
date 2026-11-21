@@ -47,6 +47,6 @@ side="CLIENT"
 [[dependencies.${mod_id}]]
 modId="oculus"
 mandatory=false
-versionRange="[0,)"
+versionRange="[1.8.0,1.8.1)"
 ordering="AFTER"
 side="CLIENT"

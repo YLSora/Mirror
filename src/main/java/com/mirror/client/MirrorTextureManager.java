@@ -33,6 +33,7 @@ public final class MirrorTextureManager {
     private static final Map<MirrorTextureKey, Long> LAST_USED_FRAME = new HashMap<>();
     private static final Set<UUID> VISIBLE_ROOTS = new HashSet<>();
     private static Set<UUID> activeRoots = Set.of();
+    private static MirrorReflectionTexture activeTexture;
     private static ClientLevel demandLevel;
     private static final List<TextureTarget> RETIRED_SURFACES = new ArrayList<>();
     private static long frameIndex;
@@ -98,6 +99,12 @@ public final class MirrorTextureManager {
             MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.DEPTH);
             return null;
         }
+        if (OculusCompat.isShaderPackInUse() && MirrorShaderPolicy.reuseParent(depth,
+                MirrorConfig.CLIENT.maxRecursionDepth.get(), MirrorConfig.CLIENT.maxShaderMirrorPipelines.get())) {
+            MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.SHADER_LAYER_LIMIT);
+            // The parent surface is composited after the capture, so this reads last frame's image.
+            return activeTexture != null && activeTexture.hasRendered() ? activeTexture : null;
+        }
 
         List<MirrorLevelRenderer.ReflectionPlane> reflectionPath =
                 MirrorLevelRenderer.getChildReflectionPath();
@@ -125,11 +132,19 @@ public final class MirrorTextureManager {
      * re-entry. Requests produced by those captures remain queued for the following outer frame.
      */
     public static void processPending(Camera camera, float partialTick) {
+        try {
+            processCaptureBatch(camera, partialTick);
+        } catch (RuntimeException | LinkageError failure) {
+            PENDING.clear();
+            MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.CAPTURE_BATCH_FAILED, failure);
+        }
+    }
+
+    private static void processCaptureBatch(Camera camera, float partialTick) {
         long batchStart = MirrorDiagnostics.startTimer();
         int gpuSlot = -1;
         try {
             MirrorViewHistory.beginFrame();
-            OculusCompat.beginMirrorFrame();
             Minecraft minecraft = Minecraft.getInstance();
             if (minecraft.level == null || camera == null) {
                 clear();
@@ -138,6 +153,7 @@ public final class MirrorTextureManager {
             discardInactiveRequests(minecraft.level);
             evictStaleViews();
             MirrorDiagnostics.recordPending(PENDING.size());
+            configureShaderLayerSizes();
             if (PENDING.isEmpty()) return;
 
             gpuSlot = MirrorDiagnostics.beginGpuBatch();
@@ -146,9 +162,6 @@ public final class MirrorTextureManager {
             MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.STATE_SAVE, saveStart);
             try {
                 renderPending(minecraft, camera, partialTick);
-                // Build at most one spare pipeline while the outer render state is still captured;
-                // Iris pipeline construction mutates framebuffer/texture bindings.
-                OculusCompat.finishMirrorFrame();
             } finally {
                 long restoreStart = MirrorDiagnostics.startTimer();
                 try {
@@ -167,6 +180,22 @@ public final class MirrorTextureManager {
             MirrorViewResources.reportMemory();
             MirrorDiagnostics.endOuterFrame(VISIBLE_ROOTS.size(), PENDING.size());
         }
+    }
+
+    private static void configureShaderLayerSizes() {
+        if (OculusCompat.isShaderPackInUse()) {
+            var requests = PENDING.values().iterator();
+            while (requests.hasNext()) {
+                Pending pending = requests.next();
+                MirrorReflectionTexture texture = TEXTURES.get(pending.key());
+                if (texture != null && !OculusCompat.requestShaderLayerSize(
+                        pending.key().depth(), texture.requestedShaderSize())) {
+                    requests.remove();
+                    MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.NO_SHADER_CAPTURE);
+                }
+            }
+        }
+        OculusCompat.sealLayerSizes();
     }
 
     private static void enqueue(MirrorTextureKey key, MirrorBlockEntity mirror,
@@ -191,7 +220,9 @@ public final class MirrorTextureManager {
                 reason = MirrorDiagnostics.Rejection.REMOVED;
             } else if (pending.key().depth() > 0
                     && (MirrorConfig.CLIENT.recursionMode.get() != MirrorConfig.RecursionMode.RECURSIVE
-                    || pending.key().depth() >= MirrorConfig.CLIENT.maxRecursionDepth.get())) {
+                    || pending.key().depth() >= MirrorConfig.CLIENT.maxRecursionDepth.get()
+                    || (OculusCompat.isShaderPackInUse() && MirrorShaderPolicy.reuseParent(pending.key().depth(),
+                    MirrorConfig.CLIENT.maxRecursionDepth.get(), MirrorConfig.CLIENT.maxShaderMirrorPipelines.get())))) {
                 reason = MirrorDiagnostics.Rejection.DEPTH;
             } else if (pending.key().depth() == 0 && !VISIBLE_ROOTS.contains(pending.key().mirrorId())
                     && MirrorConfig.CLIENT.recursionMode.get() != MirrorConfig.RecursionMode.SHARED) {
@@ -230,10 +261,12 @@ public final class MirrorTextureManager {
             if (eye != null) {
                 MirrorDiagnostics.recordView(value.key(), value.roots(), value.projectedPixels());
                 activeRoots = value.roots();
+                activeTexture = texture;
                 try {
                     texture.render(minecraft.level, value.mirror(), eye, partialTick, value.parentPath());
                 } finally {
                     activeRoots = Set.of();
+                    activeTexture = null;
                 }
             } else {
                 MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.PATH);
@@ -265,8 +298,7 @@ public final class MirrorTextureManager {
     }
 
     public static void clear() {
-        // Mirror textures/capture targets are view-owned. Oculus mirror pipelines are deliberately
-        // not destroyed here; PipelineManager.destroyPipeline is their single generation owner.
+        // View cleanup also runs during equivalent dimension switches; pipeline cleanup is separate.
         PENDING.clear();
         VISIBLE_ROOTS.clear();
         activeRoots = Set.of();
@@ -286,7 +318,9 @@ public final class MirrorTextureManager {
 
     private static MirrorReflectionTexture getOrCreate(MirrorTextureKey key, MirrorBlockEntity mirror,
                                                        double projectedPixels, double density) {
-        if (!Double.isFinite(projectedPixels) || projectedPixels <= 0.0) {
+        double aspect = (double) mirror.getScreenPixelWidth() / mirror.getScreenPixelHeight();
+        if (!Double.isFinite(projectedPixels) || projectedPixels <= 0.0
+                || !Double.isFinite(aspect) || aspect <= 0.0) {
             MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.OFFSCREEN);
             return null;
         }
@@ -303,8 +337,7 @@ public final class MirrorTextureManager {
             if (key.depth() > 0) recursiveViewCount++;
             TEXTURES.put(key, created);
         }
-        created.requestSize(frameIndex, projectedPixels,
-                (double) mirror.getScreenPixelWidth() / mirror.getScreenPixelHeight(), density);
+        created.requestSize(frameIndex, projectedPixels, aspect, density);
         return created;
     }
 

@@ -17,22 +17,22 @@ public interface OculusTerrainProgramCacheAccess {
             new OculusTerrainProgramCacheStore<>(OculusTerrainProgramCacheAccess::deleteState);
     Set<OculusTerrainProgramCacheAccess> INSTANCES =
             Collections.newSetFromMap(new WeakHashMap<>());
+    void mirror$discardMirrorPrograms(WorldRenderingPipeline pipeline);
 
-    void mirror$clearMirrorPrograms();
+    boolean mirror$prewarmPipeline(WorldRenderingPipeline pipeline);
 
     static void register(OculusTerrainProgramCacheAccess access) {
         INSTANCES.add(access);
     }
 
-    static void clearMirrorPrograms() {
-        CACHE.clear();
-        for (OculusTerrainProgramCacheAccess access : Set.copyOf(INSTANCES)) {
-            access.mirror$clearMirrorPrograms();
-        }
-    }
-
     static void destroyPipeline(WorldRenderingPipeline pipeline) {
-        CACHE.remove(pipeline);
+        try {
+            CACHE.remove(pipeline);
+        } finally {
+            for (OculusTerrainProgramCacheAccess access : Set.copyOf(INSTANCES)) {
+                access.mirror$discardMirrorPrograms(pipeline);
+            }
+        }
     }
 
     static OculusTerrainProgramCacheStore.Lookup<OculusTerrainProgramState> take(

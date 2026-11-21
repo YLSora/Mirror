@@ -21,8 +21,6 @@ public final class MirrorPassContext implements AutoCloseable {
 
     private final long viewId;
     private final int recursionDepth;
-    private final ResolutionBucket resolutionBucket;
-    private final PipelineSlot pipelineSlot;
     private final RenderTarget captureTarget;
     private final float nearPlane;
     private final float renderDistance;
@@ -50,8 +48,6 @@ public final class MirrorPassContext implements AutoCloseable {
         }
         this.viewId = viewId;
         this.recursionDepth = recursionDepth;
-        this.resolutionBucket = new ResolutionBucket(captureTarget.width, captureTarget.height);
-        this.pipelineSlot = new PipelineSlot(recursionDepth, resolutionBucket);
         this.captureTarget = captureTarget;
         this.nearPlane = nearPlane;
         this.renderDistance = renderDistance;
@@ -84,11 +80,6 @@ public final class MirrorPassContext implements AutoCloseable {
         return context;
     }
 
-    public static PipelineSlot currentPipelineSlot() {
-        return current().pipelineSlot;
-    }
-
-
     /** Stable identity of the persistent reflected camera and its per-view temporal history. */
     public long viewId() {
         return viewId;
@@ -96,14 +87,6 @@ public final class MirrorPassContext implements AutoCloseable {
 
     public int recursionDepth() {
         return recursionDepth;
-    }
-
-    public ResolutionBucket resolutionBucket() {
-        return resolutionBucket;
-    }
-
-    public PipelineSlot pipelineSlot() {
-        return pipelineSlot;
     }
 
     public RenderTarget captureTarget() {
@@ -160,6 +143,4 @@ public final class MirrorPassContext implements AutoCloseable {
     public record ResolutionBucket(int widthBucket, int heightBucket) {
     }
 
-    public record PipelineSlot(int recursionDepth, ResolutionBucket resolution) {
-    }
 }

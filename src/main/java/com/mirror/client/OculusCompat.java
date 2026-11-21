@@ -32,6 +32,10 @@ public final class OculusCompat {
         return LOADED && runtime().isShaderPackInUse();
     }
 
+    static boolean hasSelectedShaderPack() {
+        return LOADED && runtime().hasSelectedShaderPack();
+    }
+
     public static boolean shouldDeferSurfacePresentation() {
         return LOADED && runtime().isShaderPackInUse() && !runtime().isShadowPass();
     }
@@ -51,9 +55,21 @@ public final class OculusCompat {
         if (LOADED && RUNTIME != null) runtime().beginMirrorFrame();
     }
 
-    /** Finishes a real outer frame after all mirror demand has had priority. */
-    public static void finishMirrorFrame() {
-        if (LOADED && RUNTIME != null) runtime().finishMirrorFrame();
+    /** Freezes capture sizes before draining the current frame's reflected passes. */
+    public static void sealLayerSizes() {
+        if (LOADED && RUNTIME != null) runtime().sealLayerSizes();
+    }
+
+    static boolean requestShaderLayerSize(int depth, int size) {
+        return LOADED && RUNTIME != null && runtime().requestShaderLayerSize(depth, size);
+    }
+
+    public static int shaderLayerSize(int depth) {
+        return LOADED && RUNTIME != null ? runtime().shaderLayerSize(depth) : 0;
+    }
+
+    public static void clearShaderMirrorPipelines() {
+        if (LOADED && RUNTIME != null) runtime().clearShaderMirrorPipelines();
     }
 
     /** Releases Oculus state scoped to one persistent reflected-camera view. */
@@ -94,11 +110,19 @@ public final class OculusCompat {
 
         void beginMirrorFrame();
 
-        void finishMirrorFrame();
+        void sealLayerSizes();
+
+        boolean requestShaderLayerSize(int depth, int size);
+
+        int shaderLayerSize(int depth);
+
+        void clearShaderMirrorPipelines();
 
         void releaseMirrorView(long viewId);
 
         boolean isShaderPackInUse();
+
+        boolean hasSelectedShaderPack();
 
         boolean isShadowPass();
 

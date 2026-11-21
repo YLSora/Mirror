@@ -20,6 +20,7 @@ import java.io.IOException;
 @Mod.EventBusSubscriber(modid = MirrorMod.MOD_ID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
 public final class MirrorClient {
     public static ShaderInstance MIRROR_COMPOSITE_SHADER;
+    private static boolean checkLevelAfterUnload;
     private MirrorClient() {
     }
 
@@ -47,6 +48,7 @@ public final class MirrorClient {
         EmbeddiumCompat.verifySupportedVersion();
         OculusCompat.initialize();
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(MirrorClient::renderTick);
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(MirrorClient::clientTick);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(MirrorClient::levelUnload);
         net.minecraftforge.common.MinecraftForge.EVENT_BUS.addListener(MirrorClient::loggingOut);
     }
@@ -54,15 +56,32 @@ public final class MirrorClient {
     private static void renderTick(TickEvent.RenderTickEvent event) {
         // Captures run after the outer world pass. Reset deferred presentation before it starts.
         if (event.phase == TickEvent.Phase.START) {
+            OculusCompat.beginMirrorFrame();
             DeferredMirrorSurfaceRenderer.beginFrame();
         }
     }
 
     private static void levelUnload(LevelEvent.Unload event) {
-        if (event.getLevel().isClientSide()) MirrorTextureManager.clear();
+        if (event.getLevel().isClientSide()) {
+            checkLevelAfterUnload = true;
+            MirrorTextureManager.clear();
+        }
+    }
+
+    private static void clientTick(TickEvent.ClientTickEvent event) {
+        if (event.phase != TickEvent.Phase.END || !checkLevelAfterUnload) return;
+        checkLevelAfterUnload = false;
+        if (net.minecraft.client.Minecraft.getInstance().level == null) {
+            OculusCompat.clearShaderMirrorPipelines();
+        }
     }
 
     private static void loggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
-        MirrorTextureManager.clear();
+        checkLevelAfterUnload = false;
+        try {
+            MirrorTextureManager.clear();
+        } finally {
+            OculusCompat.clearShaderMirrorPipelines();
+        }
     }
 }

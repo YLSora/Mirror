@@ -10,19 +10,24 @@ import net.irisshaders.iris.pipeline.WorldRenderingPipeline;
  */
 public final class MirrorPipelineState {
     private final WorldRenderingPipeline pipeline;
+    private final WorldRenderingPipeline owner;
     private final long constructionStartedNanos;
     private boolean terrainReady;
-    private long heavyWorkFrame;
+    private boolean failed;
 
-    public MirrorPipelineState(WorldRenderingPipeline pipeline, long constructionStartedNanos,
-                               long heavyWorkFrame) {
+    public MirrorPipelineState(WorldRenderingPipeline pipeline, WorldRenderingPipeline owner,
+                               long constructionStartedNanos) {
         this.pipeline = pipeline;
+        this.owner = owner;
         this.constructionStartedNanos = constructionStartedNanos;
-        this.heavyWorkFrame = heavyWorkFrame;
     }
 
     public WorldRenderingPipeline pipeline() {
         return pipeline;
+    }
+
+    public WorldRenderingPipeline owner() {
+        return owner;
     }
 
     public long constructionStartedNanos() {
@@ -39,14 +44,14 @@ public final class MirrorPipelineState {
 
     public void markTerrainNotReady() {
         terrainReady = false;
-        heavyWorkFrame = Long.MIN_VALUE;
     }
 
-    public long heavyWorkFrame() {
-        return heavyWorkFrame;
+    public boolean failed() {
+        return failed;
     }
 
-    public void setHeavyWorkFrame(long heavyWorkFrame) {
-        this.heavyWorkFrame = heavyWorkFrame;
+    public void markFailed() {
+        terrainReady = false;
+        failed = true;
     }
 }

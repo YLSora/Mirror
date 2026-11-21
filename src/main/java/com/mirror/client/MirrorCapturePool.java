@@ -5,7 +5,6 @@ import org.lwjgl.opengl.GL11C;
 import com.mirror.compat.ThirdPartyFrame;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 /**
@@ -35,44 +34,37 @@ public final class MirrorCapturePool {
      * stall the render thread while Oculus allocates a new attachment set.
      */
     static final int MAX_SHADER_CAPTURE_EDGE = 1024;
-    private static final Map<MirrorPassContext.PipelineSlot, CaptureSlot> SLOTS = new HashMap<>();
-    private static final Map<MirrorPassContext.PipelineSlot, Long> LAST_USED = new HashMap<>();
+    private static final Map<CaptureKey, CaptureSlot> SLOTS = new HashMap<>();
+    private static final Map<CaptureKey, Long> LAST_USED = new HashMap<>();
     private static int maximumTextureSize;
 
     private MirrorCapturePool() {
     }
 
-    /** Number of shader capacity slots that should be warmed for each recursion depth. */
-    public static int shaderBucketCount() {
-        return SHADER_BUCKETS.length;
+    static int shaderBucketForSize(int requested) {
+        return shaderBucketSize(requested, requested, maximumCaptureSize(true), MIN_SHADER_LONG_EDGE).widthBucket();
     }
 
-    public static List<MirrorPassContext.ResolutionBucket> shaderBuckets() {
-        return java.util.Arrays.stream(SHADER_BUCKETS)
-                .mapToObj(size -> new MirrorPassContext.ResolutionBucket(size, size))
-                .toList();
+    public static CaptureSlot acquireShader(int depth, int size) {
+        return acquire(depth, new MirrorPassContext.ResolutionBucket(size, size));
     }
 
-    public static CaptureSlot acquire(int recursionDepth, int requestedWidth, int requestedHeight) {
+    static CaptureSlot acquireVanilla(int recursionDepth, int requestedWidth, int requestedHeight) {
         if (requestedWidth <= 0 || requestedHeight <= 0) {
             throw new IllegalArgumentException("mirror capture dimensions must be positive");
         }
-        boolean shaderCapture = OculusCompat.isShaderPackInUse();
-        int minimumLongEdge = shaderCapture ? MIN_SHADER_LONG_EDGE : MIN_BUCKET_SIZE;
-        int captureWidth = compensatedRequestSize(requestedWidth, shaderCapture);
-        int captureHeight = compensatedRequestSize(requestedHeight, shaderCapture);
-        MirrorPassContext.ResolutionBucket bucket = shaderCapture
-                ? shaderBucketSize(captureWidth, captureHeight,
-                maximumCaptureSize(true), minimumLongEdge)
-                : new MirrorPassContext.ResolutionBucket(
-                        Math.min(maximumTextureSize(), Math.max(MIN_BUCKET_SIZE, nextPowerOfTwo(captureWidth))),
-                        Math.min(maximumTextureSize(), Math.max(MIN_BUCKET_SIZE, nextPowerOfTwo(captureHeight))));
-        MirrorPassContext.PipelineSlot key = new MirrorPassContext.PipelineSlot(recursionDepth, bucket);
+        MirrorPassContext.ResolutionBucket bucket = new MirrorPassContext.ResolutionBucket(
+                Math.min(maximumTextureSize(), Math.max(MIN_BUCKET_SIZE, nextPowerOfTwo(requestedWidth))),
+                Math.min(maximumTextureSize(), Math.max(MIN_BUCKET_SIZE, nextPowerOfTwo(requestedHeight))));
+        return acquire(recursionDepth, bucket);
+    }
+
+    private static CaptureSlot acquire(int recursionDepth, MirrorPassContext.ResolutionBucket bucket) {
+        CaptureKey key = new CaptureKey(recursionDepth, bucket);
         LAST_USED.put(key, ThirdPartyFrame.id());
         return SLOTS.computeIfAbsent(key, ignored -> {
             MirrorDiagnostics.recordResource("CAPTURE_ALLOC", -1, bucket.widthBucket(), bucket.heightBucket());
-            return new CaptureSlot(key,
-                    new TextureTarget(bucket.widthBucket(), bucket.heightBucket(), true, false));
+            return new CaptureSlot(new TextureTarget(bucket.widthBucket(), bucket.heightBucket(), true, false));
         });
     }
 
@@ -158,8 +150,10 @@ public final class MirrorCapturePool {
         }
     }
 
-    public record CaptureSlot(MirrorPassContext.PipelineSlot pipelineSlot,
-                              TextureTarget target) implements AutoCloseable {
+    private record CaptureKey(int depth, MirrorPassContext.ResolutionBucket bucket) {
+    }
+
+    public record CaptureSlot(TextureTarget target) implements AutoCloseable {
         @Override
         public void close() {
             MirrorDiagnostics.recordResource("CAPTURE_FREE", -1, target.width, target.height);

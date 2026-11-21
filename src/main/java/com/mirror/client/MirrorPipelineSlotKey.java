@@ -2,13 +2,10 @@ package com.mirror.client;
 
 import net.irisshaders.iris.shaderpack.programs.ProgramSet;
 
-/** Stable identity for one secondary pipeline slot within one shader generation/program set. */
-public record MirrorPipelineSlotKey(ProgramSet programSet, MirrorPassContext.PipelineSlot slot) {
-    public MirrorPassContext.ResolutionBucket resolution() {
-        return slot.resolution();
-    }
-
+/** Stable identity for one secondary pipeline per semantic shader set and recursion layer. */
+public record MirrorPipelineSlotKey(ProgramSet programSet, int recursionDepth) {
     public String label() {
-        return "programSet@" + Integer.toHexString(System.identityHashCode(programSet));
+        return "programSet@" + Integer.toHexString(System.identityHashCode(programSet))
+                + "/depth=" + recursionDepth;
     }
 }

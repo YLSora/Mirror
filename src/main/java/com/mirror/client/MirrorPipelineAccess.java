@@ -10,8 +10,16 @@ public interface MirrorPipelineAccess {
     /** Starts a real outer frame and replenishes the single heavyweight slot-build budget. */
     void mirror$beginFrame();
 
-    /** Builds at most one queued spare after all mirror demand in this frame has had priority. */
-    void mirror$finishFrame();
+    /** Commits the frame's maximum requested shader capture size and shrink hysteresis. */
+    void mirror$sealLayerSizes();
+
+    boolean mirror$requestLayerSize(int depth, int size);
+
+    int mirror$getLayerSize(int depth);
+
+    void mirror$logout();
+
+    void mirror$prewarmTerrainPrograms(OculusTerrainProgramCacheAccess compiler);
 
     /** Claims this frame's heavyweight budget immediately before terrain programs are created. */
     void mirror$beginTerrainProgramBuild(WorldRenderingPipeline pipeline);
@@ -22,8 +30,7 @@ public interface MirrorPipelineAccess {
     /** Invalidates terrain readiness after a vertex-format-specific program cache entry is dropped. */
     void mirror$markTerrainProgramsNotReady(WorldRenderingPipeline pipeline);
 
-    /** Quarantines this shader generation after a secondary terrain shader compile/link failure. */
-    void mirror$quarantineShaderGeneration(WorldRenderingPipeline pipeline, Throwable failure);
+    void mirror$recordLayerFailure(WorldRenderingPipeline pipeline, Throwable failure);
 
     /** Releases view-scoped state; heavyweight shader pipelines remain owned by their stable slot. */
     void mirror$releaseMirrorView(long viewId);

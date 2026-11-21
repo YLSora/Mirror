@@ -3,6 +3,7 @@ package com.mirror.mixin;
 import com.mirror.client.MirrorPassContext;
 import com.mirror.client.MirrorTemporalStateAccess;
 import com.mirror.client.OculusMirrorHistory;
+import net.irisshaders.iris.gl.buffer.ShaderStorageBufferHolder;
 import net.irisshaders.iris.shaderpack.properties.PackDirectives;
 import net.irisshaders.iris.targets.RenderTargets;
 import org.spongepowered.asm.mixin.Final;
@@ -20,11 +21,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 abstract class OculusMirrorTemporalStateMixin implements MirrorTemporalStateAccess {
     @Shadow @Final private RenderTargets renderTargets;
     @Shadow @Final private PackDirectives packDirectives;
+    @Shadow @Final private ShaderStorageBufferHolder shaderStorageBufferHolder;
     @Unique private final OculusMirrorHistory mirror$history = new OculusMirrorHistory();
 
     @Inject(method = "beginLevelRendering", at = @At("HEAD"), require = 1)
     private void mirror$saveOutgoingHistory(CallbackInfo callback) {
         if (!MirrorPassContext.isActive()) return;
+        mirror$bindStorageBuffers();
         mirror$history.leave(MirrorPassContext.current().viewId(), renderTargets,
                 packDirectives.getRenderTargetDirectives().getRenderTargetSettings());
     }
@@ -46,4 +49,9 @@ abstract class OculusMirrorTemporalStateMixin implements MirrorTemporalStateAcce
     private void mirror$destroyHistory(CallbackInfo callback) { mirror$history.destroy(); }
 
     @Override public void mirror$releaseView(long viewId) { mirror$history.release(viewId); }
+
+    @Override public void mirror$bindStorageBuffers() {
+        // Oculus binds these when constructing or resizing a pipeline, not on a pipeline switch.
+        if (shaderStorageBufferHolder != null) shaderStorageBufferHolder.setupBuffers();
+    }
 }

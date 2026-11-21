@@ -70,6 +70,11 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         return rendered;
     }
 
+    int requestedShaderSize() {
+        return MirrorCapturePool.shaderBucketForSize(MirrorCapturePool.compensatedRequestSize(
+                sizing.requestedLongEdge(), true));
+    }
+
     public float fade() {
         if (firstRenderNanos < 0) return 0.0f;
         long elapsed = System.nanoTime() - firstRenderNanos;
@@ -86,6 +91,7 @@ public final class MirrorReflectionTexture implements AutoCloseable {
         int captureWidth = 0;
         int captureHeight = 0;
         boolean completed = false;
+        boolean shaderCapture = OculusCompat.isShaderPackInUse();
         try {
             ScreenRect screen = mirror.getScreenRect();
             MirrorReflection groupReflection = MirrorReflection.compute(screen.center(), screen.normal(), eye);
@@ -97,17 +103,22 @@ public final class MirrorReflectionTexture implements AutoCloseable {
                     MirrorBlockEntity.FRAME_PIXELS / 32.0);
             int oldWidth = sizing.width();
             int oldHeight = sizing.height();
-            boolean shaderCapture = OculusCompat.isShaderPackInUse();
-            sizing.update(MirrorCapturePool.maximumCaptureSize(shaderCapture), shaderCapture);
+            int layerSize = shaderCapture ? OculusCompat.shaderLayerSize(recursionDepth) : 0;
+            if ((shaderCapture && layerSize == 0) || (!shaderCapture && OculusCompat.hasSelectedShaderPack())) {
+                MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.NO_SHADER_CAPTURE);
+                return;
+            }
+            sizing.update(shaderCapture ? layerSize : MirrorCapturePool.maximumCaptureSize(false));
             if (oldWidth != sizing.width() || oldHeight != sizing.height()) {
                 viewHistory.reset();
                 MirrorDiagnostics.recordResource("SIZE_CHANGE", viewId, sizing.width(), sizing.height());
             }
-            MirrorCapturePool.CaptureSlot capture = MirrorCapturePool.acquire(
-                    recursionDepth, sizing.width(), sizing.height());
+            MirrorCapturePool.CaptureSlot capture = shaderCapture
+                    ? MirrorCapturePool.acquireShader(recursionDepth, layerSize)
+                    : MirrorCapturePool.acquireVanilla(recursionDepth, sizing.width(), sizing.height());
             captureWidth = capture.target().width;
             captureHeight = capture.target().height;
-            MirrorProjection.ViewportProjection captureProjection = OculusCompat.isShaderPackInUse()
+            MirrorProjection.ViewportProjection captureProjection = shaderCapture
                     ? projectionStabilizer.fit(projection, captureWidth, captureHeight)
                     : projection.offAxis();
             MirrorLevelRenderer.render(level, mirror, groupReflection, capture.target(), partialTick,
@@ -140,6 +151,9 @@ public final class MirrorReflectionTexture implements AutoCloseable {
             if (firstRenderNanos < 0) firstRenderNanos = System.nanoTime();
         } catch (MirrorPipelineUnavailableException unavailable) {
             MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.PIPELINE);
+        } catch (Throwable failure) {
+            if (!shaderCapture) throw failure;
+            MirrorDiagnostics.reject(MirrorDiagnostics.Rejection.SHADER_PASS_FAILED, failure);
         } finally {
             MirrorDiagnostics.finishTimer(MirrorDiagnostics.Stage.PASS_TOTAL, passStart);
             MirrorDiagnostics.recordCapture(viewId, mirror.getId(), recursionDepth,

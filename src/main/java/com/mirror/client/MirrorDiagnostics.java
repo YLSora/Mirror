@@ -19,7 +19,8 @@ public final class MirrorDiagnostics {
     }
 
     public enum Rejection {
-        OFFSCREEN, BACKFACE, DISTANCE, DEPTH, PIXELS, CAPACITY, NO_ROOT, REMOVED, PATH, PIPELINE
+        OFFSCREEN, BACKFACE, DISTANCE, DEPTH, PIXELS, CAPACITY, NO_ROOT, REMOVED, PATH, PIPELINE,
+        SHADER_LAYER_LIMIT, NO_SHADER_CAPTURE, SHADER_PASS_FAILED, CAPTURE_BATCH_FAILED, TERRAIN_PREWARM_FAILED
     }
 
     private static final Stage[] STAGES = Stage.values();
@@ -27,6 +28,7 @@ public final class MirrorDiagnostics {
     private static final long[] FRAME_NANOS = new long[STAGES.length];
     private static final long[][] FRAME_SAMPLES = new long[STAGES.length][SUMMARY_INTERVAL_FRAMES];
     private static final int[] FRAME_REJECTIONS = new int[REJECTIONS.length];
+    private static final long[] LAST_REJECTION_LOG_NANOS = new long[REJECTIONS.length];
     private static final MirrorGpuTimer GPU_TIMER = new MirrorGpuTimer();
     private static final long[] GPU_SAMPLES = new long[SUMMARY_INTERVAL_FRAMES];
     private static boolean debugEnabled;
@@ -118,7 +120,17 @@ public final class MirrorDiagnostics {
     }
 
     public static void reject(Rejection reason) {
+        reject(reason, null);
+    }
+
+    public static void reject(Rejection reason, Throwable failure) {
         FRAME_REJECTIONS[reason.ordinal()]++;
+        long now = System.nanoTime();
+        int index = reason.ordinal();
+        if (LAST_REJECTION_LOG_NANOS[index] != 0L
+                && now - LAST_REJECTION_LOG_NANOS[index] < 10_000_000_000L) return;
+        LAST_REJECTION_LOG_NANOS[index] = now;
+        LOGGER.warn("[Mirror] Reflection rejected: {} (rate limited to one message per 10 seconds per reason)", reason, failure);
     }
 
     public static void recordPending(int pendingViews) {
@@ -288,7 +300,7 @@ public final class MirrorDiagnostics {
                 formatMillis(nanosToMillis(totalWarmupNanos)));
     }
 
-    public static void pipelineConstructed(Object dimension, MirrorPassContext.PipelineSlot slot,
+    public static void pipelineConstructed(Object dimension, int slot,
                                            long elapsedNanos) {
         if (!isDebugEnabled()) return;
         LOGGER.info("[Mirror diagnostics] Constructed mirror pipeline for program set {}, slot {} in {} ms; "
@@ -296,7 +308,7 @@ public final class MirrorDiagnostics {
                 dimension, slot, formatMillis(nanosToMillis(elapsedNanos)));
     }
 
-    public static void terrainProgramsReady(Object dimension, MirrorPassContext.PipelineSlot slot,
+    public static void terrainProgramsReady(Object dimension, int slot,
                                             long compileNanos, long totalWarmupNanos) {
         if (!isDebugEnabled()) return;
         LOGGER.info("[Mirror diagnostics] Mirror pipeline READY for program set {}, slot {}: terrain programs {} ms, "
